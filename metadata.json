@@ -1,0 +1,5 @@
+{
+  "name": "Golden_Bridge_Spending_Tracker",
+  "description": "A web application for participants of the 'Golden Bridge Women' mentorship program to track their spending against a set budget for specific cycles.",
+  "requestFramePermissions": []
+}

@@ -1,7 +1,7 @@
-import { User, StoredUser } from '../types';
+import { User, StoredUser, UserRole } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 
-const USERS_STORAGE_KEY = 'gbw_users';
+const USERS_STORAGE_KEY = 'gbw_users_v2'; // Updated for role support
 const CURRENT_USER_KEY = 'gbw_current_user';
 
 // Simple hash function for passwords (Note: In production, use proper crypto library)
@@ -32,8 +32,15 @@ export class UserManager {
     return users.some(user => user.email.toLowerCase() === email.toLowerCase());
   }
 
-  // Create a new user account
-  static async createUser(name: string, email: string, password: string): Promise<User> {
+  // Create a new user account with role
+  static async createUser(
+    name: string,
+    email: string,
+    password: string,
+    role: UserRole = UserRole.PARTICIPANT,
+    programIds: string[] = [],
+    managedProgramIds: string[] = []
+  ): Promise<User> {
     if (this.isEmailRegistered(email)) {
       throw new Error('Email is already registered');
     }
@@ -43,6 +50,9 @@ export class UserManager {
       id: uuidv4(),
       name,
       email: email.toLowerCase(),
+      role,
+      programIds,
+      managedProgramIds: role === UserRole.PROGRAM_MANAGER ? managedProgramIds : undefined,
       passwordHash,
       createdAt: new Date().toISOString(),
     };
@@ -141,6 +151,105 @@ export class UserManager {
 
       // Optional: Remove old cycles after migration
       // localStorage.removeItem(oldCyclesKey);
+    }
+  }
+
+  // Migrate existing users to new role-based structure
+  static migrateExistingUsers(): void {
+    const oldUsersKey = 'gbw_users';
+    const oldUsers = localStorage.getItem(oldUsersKey);
+
+    if (oldUsers) {
+      const parsedUsers = JSON.parse(oldUsers) as StoredUser[];
+      const migratedUsers = parsedUsers.map(user => ({
+        ...user,
+        role: user.role || UserRole.PARTICIPANT, // Default to participant
+        programIds: user.programIds || [],
+        managedProgramIds: user.managedProgramIds || []
+      }));
+
+      localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(migratedUsers));
+    }
+  }
+
+  // Get user by ID
+  static getUserById(userId: string): User | null {
+    const users = this.getUsers();
+    const user = users.find(u => u.id === userId);
+
+    if (!user) return null;
+
+    const { passwordHash: _, ...userWithoutPassword } = user;
+    return userWithoutPassword;
+  }
+
+  // Get users by role
+  static getUsersByRole(role: UserRole): User[] {
+    const users = this.getUsers();
+    return users
+      .filter(u => u.role === role)
+      .map(({ passwordHash: _, ...user }) => user);
+  }
+
+  // Get users in a specific program
+  static getUsersInProgram(programId: string): User[] {
+    const users = this.getUsers();
+    return users
+      .filter(u => u.programIds?.includes(programId))
+      .map(({ passwordHash: _, ...user }) => user);
+  }
+
+  // Check if user has permission for a program
+  static userHasAccessToProgram(userId: string, programId: string): boolean {
+    const user = this.getUserById(userId);
+    if (!user) return false;
+
+    // Admins have access to all programs
+    if (user.role === UserRole.ADMIN) return true;
+
+    // Managers have access to programs they manage
+    if (user.role === UserRole.PROGRAM_MANAGER) {
+      return user.managedProgramIds?.includes(programId) || false;
+    }
+
+    // Participants have access to programs they're part of
+    return user.programIds?.includes(programId) || false;
+  }
+
+  // Add user to program
+  static async addUserToProgram(userId: string, programId: string): Promise<void> {
+    const users = this.getUsers();
+    const userIndex = users.findIndex(u => u.id === userId);
+
+    if (userIndex === -1) throw new Error('User not found');
+
+    if (!users[userIndex].programIds) {
+      users[userIndex].programIds = [];
+    }
+
+    if (!users[userIndex].programIds!.includes(programId)) {
+      users[userIndex].programIds!.push(programId);
+      this.saveUsers(users);
+    }
+  }
+
+  // Add manager to program
+  static async addManagerToProgram(userId: string, programId: string): Promise<void> {
+    const users = this.getUsers();
+    const userIndex = users.findIndex(u => u.id === userId);
+
+    if (userIndex === -1) throw new Error('User not found');
+    if (users[userIndex].role !== UserRole.PROGRAM_MANAGER) {
+      throw new Error('User is not a program manager');
+    }
+
+    if (!users[userIndex].managedProgramIds) {
+      users[userIndex].managedProgramIds = [];
+    }
+
+    if (!users[userIndex].managedProgramIds!.includes(programId)) {
+      users[userIndex].managedProgramIds!.push(programId);
+      this.saveUsers(users);
     }
   }
 }

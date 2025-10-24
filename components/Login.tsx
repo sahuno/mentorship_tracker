@@ -1,6 +1,6 @@
 
-import React, { useState } from 'react';
-import { User } from '../types';
+import React, { useState, useEffect } from 'react';
+import { User, UserRole } from '../types';
 import UserManager from '../utils/userManager';
 
 interface LoginProps {
@@ -13,8 +13,15 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [role, setRole] = useState<UserRole>(UserRole.PARTICIPANT);
+  const [accessCode, setAccessCode] = useState(''); // For manager/admin roles
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  // Run migration on component mount
+  useEffect(() => {
+    UserManager.migrateExistingUsers();
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -34,7 +41,15 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           throw new Error('Passwords do not match');
         }
 
-        const newUser = await UserManager.createUser(name, email, password);
+        // Validate access codes for special roles
+        if (role === UserRole.PROGRAM_MANAGER && accessCode !== 'MANAGER2024') {
+          throw new Error('Invalid access code for Program Manager role');
+        }
+        if (role === UserRole.ADMIN && accessCode !== 'ADMIN2024') {
+          throw new Error('Invalid access code for Admin role');
+        }
+
+        const newUser = await UserManager.createUser(name, email, password, role);
         UserManager.saveSession(newUser);
         UserManager.migrateExistingCycles(newUser.id);
         onLogin(newUser);
@@ -61,6 +76,8 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     setEmail('');
     setPassword('');
     setConfirmPassword('');
+    setRole(UserRole.PARTICIPANT);
+    setAccessCode('');
   };
 
   return (
@@ -118,19 +135,88 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
               />
             </div>
             {isSignUp && (
-              <div>
-                <input
-                  id="confirm-password"
-                  name="confirm-password"
-                  type="password"
-                  autoComplete="new-password"
-                  required
-                  className="appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
-                  placeholder="Confirm password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                />
-              </div>
+              <>
+                <div>
+                  <input
+                    id="confirm-password"
+                    name="confirm-password"
+                    type="password"
+                    autoComplete="new-password"
+                    required
+                    className="appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
+                    placeholder="Confirm password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                  />
+                </div>
+
+                {/* Role Selection */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Select Role
+                  </label>
+                  <div className="space-y-2">
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        name="role"
+                        value={UserRole.PARTICIPANT}
+                        checked={role === UserRole.PARTICIPANT}
+                        onChange={(e) => setRole(e.target.value as UserRole)}
+                        className="mr-2"
+                      />
+                      <span className="text-sm">
+                        <span className="font-medium">Participant</span> - Track milestones and expenses
+                      </span>
+                    </label>
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        name="role"
+                        value={UserRole.PROGRAM_MANAGER}
+                        checked={role === UserRole.PROGRAM_MANAGER}
+                        onChange={(e) => setRole(e.target.value as UserRole)}
+                        className="mr-2"
+                      />
+                      <span className="text-sm">
+                        <span className="font-medium">Program Manager</span> - Manage participants and programs
+                      </span>
+                    </label>
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        name="role"
+                        value={UserRole.ADMIN}
+                        checked={role === UserRole.ADMIN}
+                        onChange={(e) => setRole(e.target.value as UserRole)}
+                        className="mr-2"
+                      />
+                      <span className="text-sm">
+                        <span className="font-medium">Admin</span> - Full system access
+                      </span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Access Code for Manager/Admin */}
+                {(role === UserRole.PROGRAM_MANAGER || role === UserRole.ADMIN) && (
+                  <div>
+                    <input
+                      id="access-code"
+                      name="access-code"
+                      type="text"
+                      required
+                      className="appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
+                      placeholder={`Access code for ${role === UserRole.ADMIN ? 'Admin' : 'Program Manager'}`}
+                      value={accessCode}
+                      onChange={(e) => setAccessCode(e.target.value)}
+                    />
+                    <p className="mt-1 text-xs text-gray-500">
+                      Contact administrator for access code
+                    </p>
+                  </div>
+                )}
+              </>
             )}
           </div>
           {error && (

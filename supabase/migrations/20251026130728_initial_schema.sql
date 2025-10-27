@@ -3,8 +3,9 @@
 -- Date: 2025-10-26
 -- Description: Complete database schema with RLS policies for production deployment
 
--- Enable UUID extension
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+-- Enable pgcrypto extension for gen_random_uuid()
+-- Note: Supabase uses gen_random_uuid() instead of gen_random_uuid()
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- ============================================================================
 -- PROFILES TABLE
@@ -27,7 +28,7 @@ COMMENT ON COLUMN profiles.role IS 'User role: admin (full access), program_mana
 -- Represents mentorship programs managed by program managers
 -- ============================================================================
 CREATE TABLE programs (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
   description TEXT,
   manager_id UUID REFERENCES profiles(id),
@@ -64,7 +65,7 @@ COMMENT ON TABLE program_participants IS 'Junction table linking participants to
 -- Spending periods within programs for tracking expenses
 -- ============================================================================
 CREATE TABLE balance_cycles (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   program_id UUID REFERENCES programs(id) ON DELETE CASCADE,
   participant_id UUID REFERENCES profiles(id),
   start_date DATE NOT NULL,
@@ -88,7 +89,7 @@ CREATE INDEX idx_balance_cycles_active ON balance_cycles(participant_id, is_acti
 -- Individual expense entries within balance cycles
 -- ============================================================================
 CREATE TABLE expenses (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   cycle_id UUID REFERENCES balance_cycles(id) ON DELETE CASCADE,
   description TEXT NOT NULL,
   amount DECIMAL(10,2) NOT NULL CHECK (amount >= 0),
@@ -114,7 +115,7 @@ CREATE INDEX idx_expenses_category ON expenses(category);
 -- Goals or tasks within programs
 -- ============================================================================
 CREATE TABLE milestones (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   program_id UUID REFERENCES programs(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   description TEXT,
@@ -130,7 +131,7 @@ COMMENT ON TABLE milestones IS 'Program milestones with optional completion rewa
 -- Tracks participant progress on milestones
 -- ============================================================================
 CREATE TABLE milestone_assignments (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   milestone_id UUID REFERENCES milestones(id) ON DELETE CASCADE,
   participant_id UUID REFERENCES profiles(id),
   status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'completed', 'verified')),
@@ -152,7 +153,7 @@ CREATE INDEX idx_milestone_assignments_participant ON milestone_assignments(part
 -- In-app notifications for users
 -- ============================================================================
 CREATE TABLE notifications (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES profiles(id) ON DELETE CASCADE,
   type TEXT NOT NULL,
   title TEXT NOT NULL,

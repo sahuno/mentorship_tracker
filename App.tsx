@@ -1,31 +1,73 @@
 
 import React, { useState, useEffect } from 'react';
-import Login from './components/Login';
+import Login from './components/LoginSupabase';
 import Dashboard from './components/Dashboard';
 import ProgramManagerDashboard from './components/ProgramManagerDashboard';
 import { User, UserRole } from './types';
-import UserManager from './utils/userManager';
+import { getUser, getUserProfile, signOut, onAuthStateChange } from './src/lib/auth';
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [isCheckingSession, setIsCheckingSession] = useState(true);
 
-  // Check for existing session on mount
+  // Check for existing Supabase session on mount
   useEffect(() => {
-    const existingUser = UserManager.getSession();
-    if (existingUser) {
-      setUser(existingUser);
-    }
-    setIsCheckingSession(false);
+    const checkSession = async () => {
+      try {
+        const supabaseUser = await getUser();
+        if (supabaseUser) {
+          const profile = await getUserProfile(supabaseUser.id);
+          if (profile) {
+            setUser({
+              id: supabaseUser.id,
+              email: supabaseUser.email || '',
+              name: profile.name,
+              role: profile.role as UserRole,
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Error checking session:', error);
+      } finally {
+        setIsCheckingSession(false);
+      }
+    };
+
+    checkSession();
+
+    // Listen for auth state changes
+    const { data: { subscription } } = onAuthStateChange(async (supabaseUser) => {
+      if (supabaseUser) {
+        const profile = await getUserProfile(supabaseUser.id);
+        if (profile) {
+          setUser({
+            id: supabaseUser.id,
+            email: supabaseUser.email || '',
+            name: profile.name,
+            role: profile.role as UserRole,
+          });
+        }
+      } else {
+        setUser(null);
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
   }, []);
 
   const handleLogin = (loggedInUser: User) => {
     setUser(loggedInUser);
   };
 
-  const handleLogout = () => {
-    UserManager.clearSession();
-    setUser(null);
+  const handleLogout = async () => {
+    try {
+      await signOut();
+      setUser(null);
+    } catch (error) {
+      console.error('Error signing out:', error);
+    }
   };
 
   // Show loading while checking session

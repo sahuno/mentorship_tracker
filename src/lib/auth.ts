@@ -61,6 +61,8 @@ export async function signInWithMagicLink(email: string) {
  */
 export async function signUp({ email, password, name, role, phone }: SignUpData) {
   // Create auth user
+  // Note: Profile is created automatically by database trigger (handle_new_user)
+  // The trigger extracts name, role, and phone from raw_user_meta_data
   const { data: authData, error: authError } = await supabase.auth.signUp({
     email,
     password,
@@ -68,6 +70,7 @@ export async function signUp({ email, password, name, role, phone }: SignUpData)
       data: {
         name,
         role,
+        phone,
       },
     },
   })
@@ -80,22 +83,8 @@ export async function signUp({ email, password, name, role, phone }: SignUpData)
     throw new Error('Failed to create user')
   }
 
-  // Create profile record
-  const { error: profileError } = await supabase
-    .from('profiles')
-    .insert({
-      id: authData.user.id,
-      name,
-      role,
-      phone,
-    })
-
-  if (profileError) {
-    // If profile creation fails, we should clean up the auth user
-    // Note: This requires admin privileges, so we'll just throw the error
-    console.error('Profile creation failed:', profileError)
-    throw new Error('Failed to create user profile. Please contact support.')
-  }
+  // Profile is automatically created by the database trigger
+  // No need for manual insertion - the trigger handles it with SECURITY DEFINER
 
   return authData
 }

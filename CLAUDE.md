@@ -121,3 +121,33 @@ Since all data is stored in localStorage (including base64 images), be mindful o
 - **Gemini API Key**: Required for OCR functionality, configured via `.env.local`
 - **LocalStorage**: All user data persists client-side only (no backend)
 - **Vite Dev Server**: Runs on port 3000, accessible from network via `0.0.0.0`
+
+## Security Enhancements
+
+### Profile Creation Security (Current Implementation)
+
+**RLS Policy Approach** (Implemented: 2025-10-27)
+- Users can INSERT their own profile during signup via RLS policy
+- Policy restricts role to 'participant' only to prevent privilege escalation
+- Location: `supabase/migrations/20251027153131_allow_profile_creation.sql`
+- Security constraint: `WITH CHECK (auth.uid() = id AND role IN ('participant'))`
+
+**Long-term Enhancement Recommendation**
+- Consider adding database trigger as additional safety layer (belt-and-suspenders approach)
+- Trigger would automatically create profiles on user signup, bypassing RLS entirely
+- Benefits:
+  - Enforced defaults at database level (cannot be bypassed by app code)
+  - Runs with SECURITY DEFINER (elevated privileges)
+  - Single source of truth for profile creation logic
+  - Protection against client-side manipulation
+- Trade-offs:
+  - Less flexible for custom signup fields
+  - Harder to debug if trigger fails
+  - Requires SQL knowledge to modify signup flow
+- Implementation: See Option 2 in `handoff_20251027_1535.md:51-72`
+- Decision: Current RLS approach is sufficient for MVP; revisit trigger approach if security incidents occur or before production launch with sensitive data
+
+**Admin/Manager Role Assignment**
+- Admin and manager roles must be assigned manually by existing admins
+- Self-signup always creates 'participant' role
+- Future enhancement: Add admin dashboard for role management

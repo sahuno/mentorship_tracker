@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { signInWithPassword, signUp, getUserProfile } from '../src/lib/auth';
+import { login, signUp } from '../src/lib/auth';
 import { UserRole } from '../types';
 
 interface LoginProps {
@@ -61,22 +61,20 @@ const LoginSupabase: React.FC<LoginProps> = ({ onLogin }) => {
           // We'll need to handle this in production
         }
       } else {
-        // Sign in flow
-        const { user } = await signInWithPassword({ email, password });
+        // Sign in flow with enhanced secure profile fetching
+        const result = await login({ email, password });
 
-        if (!user) {
+        if (!result.user) {
           throw new Error('Invalid email or password');
         }
 
-        // Get user profile with role
-        const profile = await getUserProfile(user.id);
-
         // Call onLogin with combined user data
+        // The login function already fetches the profile securely
         onLogin({
-          id: user.id,
-          email: user.email,
-          name: profile?.name || '',
-          role: profile?.role || UserRole.PARTICIPANT,
+          id: result.user.id,
+          email: result.user.email,
+          name: result.profile?.name || '',
+          role: result.profile?.role || UserRole.PARTICIPANT,
         });
       }
     } catch (err) {

@@ -4,7 +4,7 @@ import Login from './components/LoginSupabase';
 import Dashboard from './components/Dashboard';
 import ProgramManagerDashboard from './components/ProgramManagerDashboard';
 import { User, UserRole } from './types';
-import { getUser, getUserProfile, signOut, onAuthStateChange } from './src/lib/auth';
+import { getUser, getUserProfileSecure, signOut, onAuthStateChange } from './src/lib/auth';
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
@@ -16,7 +16,8 @@ const App: React.FC = () => {
       try {
         const supabaseUser = await getUser();
         if (supabaseUser) {
-          const profile = await getUserProfile(supabaseUser.id);
+          // Use secure profile fetch with session verification
+          const profile = await getUserProfileSecure();
           if (profile) {
             setUser({
               id: supabaseUser.id,
@@ -38,14 +39,19 @@ const App: React.FC = () => {
     // Listen for auth state changes
     const { data: { subscription } } = onAuthStateChange(async (supabaseUser) => {
       if (supabaseUser) {
-        const profile = await getUserProfile(supabaseUser.id);
-        if (profile) {
-          setUser({
-            id: supabaseUser.id,
-            email: supabaseUser.email || '',
-            name: profile.name,
-            role: profile.role as UserRole,
-          });
+        // Use secure profile fetch with session verification
+        try {
+          const profile = await getUserProfileSecure();
+          if (profile) {
+            setUser({
+              id: supabaseUser.id,
+              email: supabaseUser.email || '',
+              name: profile.name,
+              role: profile.role as UserRole,
+            });
+          }
+        } catch (error) {
+          console.error('Error fetching profile on auth change:', error);
         }
       } else {
         setUser(null);

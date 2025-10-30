@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { login, signUp } from '../src/lib/auth';
+import { getInviteDetails, acceptInvite } from '../src/lib/programs';
 import { UserRole } from '../types';
 
 interface LoginProps {
@@ -18,6 +19,43 @@ const LoginSupabase: React.FC<LoginProps> = ({ onLogin }) => {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  // Invite handling
+  const [inviteCode, setInviteCode] = useState<string | null>(null);
+  const [inviteDetails, setInviteDetails] = useState<any>(null);
+  const [loadingInvite, setLoadingInvite] = useState(false);
+
+  // Check for invite code in URL on mount
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const invite = params.get('invite');
+
+    if (invite) {
+      setInviteCode(invite);
+      setIsSignUp(true); // Auto-switch to signup mode
+      loadInviteDetails(invite);
+    }
+  }, []);
+
+  const loadInviteDetails = async (code: string) => {
+    try {
+      setLoadingInvite(true);
+      const details = await getInviteDetails(code);
+
+      if (details) {
+        setInviteDetails(details);
+        setEmail(details.email); // Pre-fill email from invite
+        setRole(UserRole.PARTICIPANT); // Force participant role for invites
+      } else {
+        setError('Invalid or expired invite link');
+      }
+    } catch (err) {
+      console.error('Error loading invite:', err);
+      setError('Failed to load invite details');
+    } finally {
+      setLoadingInvite(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -51,12 +89,31 @@ const LoginSupabase: React.FC<LoginProps> = ({ onLogin }) => {
           email,
           password,
           name,
-          role,
+          role: inviteCode ? UserRole.PARTICIPANT : role, // Force participant for invites
           phone: phone || undefined,
         });
 
         if (user) {
-          setSuccess('Account created successfully! Please check your email to confirm your account.');
+          // If signing up with an invite, accept it
+          if (inviteCode) {
+            try {
+              const accepted = await acceptInvite(inviteCode, user.id);
+              if (accepted) {
+                setSuccess(
+                  `Account created and enrolled in ${inviteDetails?.program?.name}! ` +
+                  'Please check your email to confirm your account.'
+                );
+              } else {
+                setSuccess('Account created! Please check your email to confirm your account.');
+              }
+            } catch (inviteError) {
+              console.error('Error accepting invite:', inviteError);
+              // Don't fail signup if invite acceptance fails
+              setSuccess('Account created! Please check your email to confirm your account.');
+            }
+          } else {
+            setSuccess('Account created successfully! Please check your email to confirm your account.');
+          }
           // Note: Supabase requires email confirmation by default
           // We'll need to handle this in production
         }
@@ -117,6 +174,44 @@ const LoginSupabase: React.FC<LoginProps> = ({ onLogin }) => {
           </div>
         </div>
 
+        {/* Invite Details Banner */}
+        {loadingInvite && (
+          <div className="p-4 bg-blue-50 border border-blue-200 rounded-md">
+            <p className="text-sm text-blue-800 text-center">Loading invite details...</p>
+          </div>
+        )}
+
+        {inviteDetails && isSignUp && (
+          <div className="p-4 bg-blue-50 border border-blue-200 rounded-md">
+            <div className="flex items-start">
+              <svg
+                className="w-5 h-5 text-blue-600 mt-0.5 mr-3 flex-shrink-0"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M3 19v-8.93a2 2 0 01.89-1.664l7-4.666a2 2 0 012.22 0l7 4.666A2 2 0 0121 10.07V19M3 19a2 2 0 002 2h14a2 2 0 002-2M3 19l6.75-4.5M21 19l-6.75-4.5M3 10l6.75 4.5M21 10l-6.75 4.5m0 0l-1.14.76a2 2 0 01-2.22 0l-1.14-.76"
+                />
+              </svg>
+              <div className="flex-1">
+                <p className="text-sm font-medium text-blue-900">You're invited to join:</p>
+                <p className="text-base font-semibold text-blue-900 mt-1">
+                  {inviteDetails.program?.name}
+                </p>
+                {inviteDetails.program?.description && (
+                  <p className="text-sm text-blue-700 mt-1">
+                    {inviteDetails.program.description}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
           <div className="space-y-4">
             {isSignUp && (
@@ -152,22 +247,24 @@ const LoginSupabase: React.FC<LoginProps> = ({ onLogin }) => {
                   />
                 </div>
 
-                <div>
-                  <label htmlFor="role" className="block text-sm font-medium text-gray-700">
-                    Account Type *
-                  </label>
-                  <select
-                    id="role"
-                    name="role"
-                    value={role}
-                    onChange={(e) => setRole(e.target.value as UserRole)}
-                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                  >
-                    <option value={UserRole.PARTICIPANT}>Participant</option>
-                    <option value={UserRole.PROGRAM_MANAGER}>Program Manager</option>
-                    <option value={UserRole.ADMIN}>Admin</option>
-                  </select>
-                </div>
+                {!inviteCode && (
+                  <div>
+                    <label htmlFor="role" className="block text-sm font-medium text-gray-700">
+                      Account Type *
+                    </label>
+                    <select
+                      id="role"
+                      name="role"
+                      value={role}
+                      onChange={(e) => setRole(e.target.value as UserRole)}
+                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                    >
+                      <option value={UserRole.PARTICIPANT}>Participant</option>
+                      <option value={UserRole.PROGRAM_MANAGER}>Program Manager</option>
+                      <option value={UserRole.ADMIN}>Admin</option>
+                    </select>
+                  </div>
+                )}
 
                 {(role === UserRole.PROGRAM_MANAGER || role === UserRole.ADMIN) && (
                   <div>
@@ -204,9 +301,15 @@ const LoginSupabase: React.FC<LoginProps> = ({ onLogin }) => {
                 autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                disabled={!!inviteCode} // Disable if from invite
+                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
                 placeholder="you@example.com"
               />
+              {inviteCode && (
+                <p className="mt-1 text-xs text-gray-500">
+                  Email is pre-filled from your invitation
+                </p>
+              )}
             </div>
 
             <div>

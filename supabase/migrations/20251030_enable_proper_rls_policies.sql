@@ -84,32 +84,19 @@ CREATE POLICY "Admins can update all profiles"
 --     )
 --   );
 
--- Policy 6: Program managers can view participants in their programs
--- This requires the program_participants table to be properly set up
--- Note: This policy assumes a many-to-many relationship via program_participants
+-- Policy 6: Program managers can view all participants
+-- Simplified version: Program managers can see all participants
+-- TODO: Update this when program_participants table is created for more granular control
 CREATE POLICY "Program managers can view participants"
   ON profiles FOR SELECT
   USING (
-    -- Allow if the current user is a program manager
-    -- AND the target profile is a participant in one of their programs
+    -- Allow program managers to view all participants
     EXISTS (
-      SELECT 1
-      FROM program_participants pp1
-      JOIN program_participants pp2 ON pp1.program_id = pp2.program_id
-      JOIN profiles manager ON manager.id = pp1.participant_id
+      SELECT 1 FROM profiles manager
       WHERE manager.id = auth.uid()
       AND manager.role = 'program_manager'
-      AND pp2.participant_id = profiles.id
     )
-    OR
-    -- Alternative: Simpler version if program managers should see all participants
-    -- Uncomment if this is the desired behavior:
-    -- EXISTS (
-    --   SELECT 1 FROM profiles
-    --   WHERE profiles.id = auth.uid()
-    --   AND profiles.role = 'program_manager'
-    --   AND profiles.role = 'participant'
-    -- )
+    AND profiles.role = 'participant'
   );
 
 -- ============================================================================

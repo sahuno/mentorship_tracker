@@ -38,7 +38,7 @@ export async function getMyPrograms() {
       profiles:participant_id (
         id,
         name,
-        email
+        phone
       )
     )
   `)
@@ -58,7 +58,7 @@ export async function getMyPrograms() {
           *,
           manager:manager_id (
             name,
-            email
+            phone
           )
         ),
         status,
@@ -94,7 +94,7 @@ export async function getProgram(programId: string) {
       manager:manager_id (
         id,
         name,
-        email
+        phone
       ),
       program_participants (
         participant_id,
@@ -103,7 +103,6 @@ export async function getProgram(programId: string) {
         profiles:participant_id (
           id,
           name,
-          email,
           role,
           phone
         )
@@ -125,22 +124,50 @@ export async function addParticipantToProgram(
   programId: string,
   participantEmail: string
 ) {
-  // First, check if user exists
-  const { data: existingUser, error: searchError } = await supabase
-    .from('profiles')
-    .select('id, name, email')
-    .eq('email', participantEmail.toLowerCase().trim())
-    .maybeSingle()
+  // Use RPC function to find user by email (since email is in auth.users, not profiles)
+  const { data: userIds, error: searchError } = await supabase
+    .rpc('find_user_by_email', { search_email: participantEmail.toLowerCase().trim() })
 
-  if (searchError) throw searchError
+  if (searchError) {
+    console.error('Error searching for user:', searchError)
+    // If RPC fails, assume user doesn't exist and create invite
+    const { data: invite, error: inviteError } = await supabase
+      .from('invites')
+      .insert({
+        program_id: programId,
+        email: participantEmail.toLowerCase().trim(),
+        status: 'pending'
+      })
+      .select()
+      .single()
 
-  if (existingUser) {
+    if (inviteError) {
+      if (inviteError.code === '23505') {
+        throw new Error('An invite has already been sent to this email')
+      }
+      throw inviteError
+    }
+
+    return {
+      success: true,
+      enrolled: false,
+      needsInvite: true,
+      inviteId: invite.id,
+      inviteCode: invite.invite_code,
+      email: participantEmail
+    }
+  }
+
+  if (userIds && userIds.length > 0) {
+    const userId = userIds[0].id
+    const userName = userIds[0].name
+
     // User exists - add them directly
     const { data, error } = await supabase
       .from('program_participants')
       .insert({
         program_id: programId,
-        participant_id: existingUser.id,
+        participant_id: userId,
         status: 'active'
       })
       .select()
@@ -157,7 +184,7 @@ export async function addParticipantToProgram(
     return {
       success: true,
       enrolled: true,
-      participant: existingUser
+      participant: { id: userId, name: userName, email: participantEmail }
     }
   } else {
     // User doesn't exist - create invite

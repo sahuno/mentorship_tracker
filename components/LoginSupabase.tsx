@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { login, signUp } from '../src/lib/auth';
-import { getInviteDetails, acceptInvite } from '../src/lib/programs';
+import { getInviteDetails } from '../src/lib/programs';
 import { UserRole } from '../types';
 
 interface LoginProps {
@@ -13,8 +13,6 @@ const LoginSupabase: React.FC<LoginProps> = ({ onLogin }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [role, setRole] = useState<UserRole>(UserRole.PARTICIPANT);
-  const [accessCode, setAccessCode] = useState('');
   const [phone, setPhone] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -45,7 +43,6 @@ const LoginSupabase: React.FC<LoginProps> = ({ onLogin }) => {
       if (details) {
         setInviteDetails(details);
         setEmail(details.email); // Pre-fill email from invite
-        setRole(UserRole.PARTICIPANT); // Force participant role for invites
       } else {
         setError('Invalid or expired invite link');
       }
@@ -54,6 +51,20 @@ const LoginSupabase: React.FC<LoginProps> = ({ onLogin }) => {
       setError('Failed to load invite details');
     } finally {
       setLoadingInvite(false);
+    }
+  };
+
+  // Helper to format role for display
+  const formatRole = (role: string): string => {
+    switch (role) {
+      case 'admin':
+        return 'Administrator';
+      case 'program_manager':
+        return 'Program Manager';
+      case 'participant':
+        return 'Participant';
+      default:
+        return role;
     }
   };
 
@@ -76,49 +87,37 @@ const LoginSupabase: React.FC<LoginProps> = ({ onLogin }) => {
           throw new Error('Passwords do not match');
         }
 
-        // Validate access codes for special roles
-        if (role === UserRole.PROGRAM_MANAGER && accessCode !== 'MANAGER2024') {
-          throw new Error('Invalid access code for Program Manager role');
-        }
-        if (role === UserRole.ADMIN && accessCode !== 'ADMIN2024') {
-          throw new Error('Invalid access code for Admin role');
-        }
-
         // Create user with Supabase
+        // Note: Role is determined by the database trigger based on invitation
         const { user } = await signUp({
           email,
           password,
           name,
-          role: inviteCode ? UserRole.PARTICIPANT : role, // Force participant for invites
+          role: UserRole.PARTICIPANT, // Default, will be overridden by invite if exists
           phone: phone || undefined,
         });
 
         if (user) {
-          // If signing up with an invite, accept it
-          if (inviteCode) {
-            try {
-              const accepted = await acceptInvite(inviteCode, user.id);
-              if (accepted) {
-                setSuccess(
-                  `Account created and enrolled in ${inviteDetails?.program?.name}! ` +
-                  'Please check your email to confirm your account.'
-                );
-              } else {
-                setSuccess('Account created! Please check your email to confirm your account.');
-              }
-            } catch (inviteError) {
-              console.error('Error accepting invite:', inviteError);
-              // Don't fail signup if invite acceptance fails
-              setSuccess('Account created! Please check your email to confirm your account.');
+          // Determine success message based on invite
+          if (inviteDetails) {
+            const roleName = formatRole(inviteDetails.target_role || 'participant');
+            if (inviteDetails.program?.name) {
+              setSuccess(
+                `Account created as ${roleName} and enrolled in "${inviteDetails.program.name}"! ` +
+                'Please check your email to confirm your account.'
+              );
+            } else {
+              setSuccess(
+                `Account created as ${roleName}! ` +
+                'Please check your email to confirm your account.'
+              );
             }
           } else {
             setSuccess('Account created successfully! Please check your email to confirm your account.');
           }
-          // Note: Supabase requires email confirmation by default
-          // We'll need to handle this in production
         }
       } else {
-        // Sign in flow with enhanced secure profile fetching
+        // Sign in flow
         const result = await login({ email, password });
 
         if (!result.user) {
@@ -126,7 +125,6 @@ const LoginSupabase: React.FC<LoginProps> = ({ onLogin }) => {
         }
 
         // Call onLogin with combined user data
-        // The login function already fetches the profile securely
         onLogin({
           id: result.user.id,
           email: result.user.email,
@@ -149,9 +147,14 @@ const LoginSupabase: React.FC<LoginProps> = ({ onLogin }) => {
     setEmail('');
     setPassword('');
     setConfirmPassword('');
-    setRole(UserRole.PARTICIPANT);
-    setAccessCode('');
     setPhone('');
+    // Clear invite if switching modes
+    if (inviteCode) {
+      setInviteCode(null);
+      setInviteDetails(null);
+      // Clear URL params
+      window.history.replaceState({}, '', window.location.pathname);
+    }
   };
 
   return (
@@ -169,7 +172,7 @@ const LoginSupabase: React.FC<LoginProps> = ({ onLogin }) => {
               <svg className="w-4 h-4 text-green-600" fill="currentColor" viewBox="0 0 20 20">
                 <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
               </svg>
-              <span className="text-xs font-medium text-green-700">Supabase Auth</span>
+              <span className="text-xs font-medium text-green-700">Secure Authentication</span>
             </div>
           </div>
         </div>
@@ -198,13 +201,39 @@ const LoginSupabase: React.FC<LoginProps> = ({ onLogin }) => {
                 />
               </svg>
               <div className="flex-1">
-                <p className="text-sm font-medium text-blue-900">You're invited to join:</p>
-                <p className="text-base font-semibold text-blue-900 mt-1">
-                  {inviteDetails.program?.name}
-                </p>
-                {inviteDetails.program?.description && (
+                <p className="text-sm font-medium text-blue-900">You've been invited!</p>
+
+                {/* Show role badge */}
+                <div className="mt-2">
+                  <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                    inviteDetails.target_role === 'admin'
+                      ? 'bg-purple-100 text-purple-800'
+                      : inviteDetails.target_role === 'program_manager'
+                      ? 'bg-blue-100 text-blue-800'
+                      : 'bg-green-100 text-green-800'
+                  }`}>
+                    {formatRole(inviteDetails.target_role || 'participant')}
+                  </span>
+                </div>
+
+                {/* Show program if applicable */}
+                {inviteDetails.program?.name && (
+                  <div className="mt-2">
+                    <p className="text-sm text-blue-700">
+                      <strong>Program:</strong> {inviteDetails.program.name}
+                    </p>
+                    {inviteDetails.program?.description && (
+                      <p className="text-xs text-blue-600 mt-1">
+                        {inviteDetails.program.description}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Show invitee name if provided */}
+                {inviteDetails.invitee_name && (
                   <p className="text-sm text-blue-700 mt-1">
-                    {inviteDetails.program.description}
+                    <strong>For:</strong> {inviteDetails.invitee_name}
                   </p>
                 )}
               </div>
@@ -247,42 +276,12 @@ const LoginSupabase: React.FC<LoginProps> = ({ onLogin }) => {
                   />
                 </div>
 
+                {/* Info box for self-signup */}
                 {!inviteCode && (
-                  <div>
-                    <label htmlFor="role" className="block text-sm font-medium text-gray-700">
-                      Account Type *
-                    </label>
-                    <select
-                      id="role"
-                      name="role"
-                      value={role}
-                      onChange={(e) => setRole(e.target.value as UserRole)}
-                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                    >
-                      <option value={UserRole.PARTICIPANT}>Participant</option>
-                      <option value={UserRole.PROGRAM_MANAGER}>Program Manager</option>
-                      <option value={UserRole.ADMIN}>Admin</option>
-                    </select>
-                  </div>
-                )}
-
-                {(role === UserRole.PROGRAM_MANAGER || role === UserRole.ADMIN) && (
-                  <div>
-                    <label htmlFor="accessCode" className="block text-sm font-medium text-gray-700">
-                      Access Code *
-                    </label>
-                    <input
-                      id="accessCode"
-                      name="accessCode"
-                      type="password"
-                      required
-                      value={accessCode}
-                      onChange={(e) => setAccessCode(e.target.value)}
-                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                      placeholder={role === UserRole.ADMIN ? 'Admin access code' : 'Manager access code'}
-                    />
-                    <p className="mt-1 text-xs text-gray-500">
-                      Contact your administrator for the access code
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-md">
+                    <p className="text-sm text-amber-800">
+                      <strong>Note:</strong> Self-registration creates a participant account.
+                      To become a Program Manager or Admin, you'll need an invitation from an existing administrator.
                     </p>
                   </div>
                 )}
@@ -386,18 +385,6 @@ const LoginSupabase: React.FC<LoginProps> = ({ onLogin }) => {
             </button>
           </div>
         </form>
-
-        {/* Test Credentials */}
-        {!isSignUp && (
-          <div className="mt-6 p-4 bg-gray-50 border border-gray-200 rounded-md">
-            <p className="text-xs font-semibold text-gray-700 mb-2">Test Credentials:</p>
-            <div className="space-y-1 text-xs text-gray-600">
-              <p><strong>Admin:</strong> admin@goldenbridge.org / Admin123!</p>
-              <p><strong>Manager:</strong> manager@goldenbridge.org / Manager123!</p>
-              <p><strong>Participant:</strong> participant@goldenbridge.org / Participant123!</p>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );

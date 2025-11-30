@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import Login from './components/LoginSupabase';
 import Dashboard from './components/Dashboard';
 import ProgramManagerDashboard from './components/ProgramManagerDashboard';
+import AdminDashboard from './components/AdminDashboard';
 import { User, UserRole } from './types';
 import { getUser, getUserProfileSecure, signOut, onAuthStateChange } from './src/lib/auth';
 
@@ -90,10 +91,10 @@ const App: React.FC = () => {
     if (!user) return <Login onLogin={handleLogin} />;
 
     switch (user.role) {
-      case UserRole.PROGRAM_MANAGER:
-        return <ProgramManagerDashboard user={user} onLogout={handleLogout} />;
       case UserRole.ADMIN:
-        // For now, admins see the program manager dashboard with full access
+        // Admins get dedicated admin dashboard with user management
+        return <AdminDashboard user={user} onLogout={handleLogout} />;
+      case UserRole.PROGRAM_MANAGER:
         return <ProgramManagerDashboard user={user} onLogout={handleLogout} />;
       case UserRole.PARTICIPANT:
       default:

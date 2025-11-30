@@ -491,3 +491,229 @@ export async function cancelInvite(inviteId: string) {
   if (error) throw error
   return { success: true }
 }
+
+// ============================================================================
+// ADMIN/ROLE MANAGEMENT FUNCTIONS
+// ============================================================================
+
+/**
+ * Get all users (admin only)
+ * Returns users with their profiles joined with auth.users for email
+ */
+export async function getAllUsers() {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+
+  // Check if user is admin
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('id', user.id)
+    .single()
+
+  if (profile?.role !== 'admin') {
+    throw new Error('Only admins can view all users')
+  }
+
+  // Get all profiles - email will need to be fetched separately or via RPC
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, name, role, phone, created_at, updated_at')
+    .order('created_at', { ascending: false })
+
+  if (error) throw error
+
+  // Try to get emails via RPC function
+  const usersWithEmails = await Promise.all(
+    (data || []).map(async (profile) => {
+      try {
+        // Use a simple approach - the email should be available from auth context
+        // For now, return profile without email - email can be added later via admin API
+        return {
+          ...profile,
+          email: undefined // Email requires admin API or database function
+        }
+      } catch {
+        return profile
+      }
+    })
+  )
+
+  return usersWithEmails
+}
+
+/**
+ * Get all pending invites (admin only)
+ */
+export async function getPendingInvites() {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+
+  // Check if user is admin
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('id', user.id)
+    .single()
+
+  if (profile?.role !== 'admin') {
+    throw new Error('Only admins can view all invites')
+  }
+
+  const { data, error } = await supabase
+    .from('invites')
+    .select(`
+      id,
+      email,
+      target_role,
+      invitee_name,
+      status,
+      created_at,
+      expires_at,
+      program:program_id (
+        id,
+        name
+      )
+    `)
+    .eq('status', 'pending')
+    .gt('expires_at', new Date().toISOString())
+    .order('created_at', { ascending: false })
+
+  if (error) throw error
+  return data || []
+}
+
+/**
+ * Create a role-based invite (admin only for admin/manager roles)
+ */
+export async function createRoleInvite(
+  email: string,
+  inviteeName: string,
+  targetRole: 'participant' | 'program_manager' | 'admin',
+  programId?: string
+) {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+
+  // Check if user has permission to create this invite
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('id', user.id)
+    .single()
+
+  // Only admins can create admin or manager invites
+  if (targetRole === 'admin' || targetRole === 'program_manager') {
+    if (profile?.role !== 'admin') {
+      throw new Error('Only admins can invite managers and admins')
+    }
+  }
+
+  // Create the invite
+  const { data: invite, error } = await supabase
+    .from('invites')
+    .insert({
+      email: email.toLowerCase().trim(),
+      invitee_name: inviteeName || null,
+      target_role: targetRole,
+      program_id: programId || null,
+      invited_by: user.id,
+      status: 'pending',
+      expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
+    })
+    .select()
+    .single()
+
+  if (error) {
+    if (error.code === '23505') {
+      throw new Error('An invitation already exists for this email')
+    }
+    throw error
+  }
+
+  return {
+    success: true,
+    inviteCode: invite.invite_code,
+    inviteId: invite.id
+  }
+}
+
+/**
+ * Update a user's role (admin only)
+ */
+export async function updateUserRole(userId: string, newRole: 'participant' | 'program_manager' | 'admin') {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+
+  // Check if user is admin
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('id', user.id)
+    .single()
+
+  if (profile?.role !== 'admin') {
+    throw new Error('Only admins can change user roles')
+  }
+
+  // Prevent changing own role
+  if (userId === user.id) {
+    throw new Error('You cannot change your own role')
+  }
+
+  const { data, error } = await supabase
+    .from('profiles')
+    .update({ role: newRole, updated_at: new Date().toISOString() })
+    .eq('id', userId)
+    .select()
+    .single()
+
+  if (error) throw error
+  return data
+}
+
+/**
+ * Get system statistics (admin only)
+ */
+export async function getSystemStats() {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+
+  // Check if user is admin
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('id', user.id)
+    .single()
+
+  if (profile?.role !== 'admin') {
+    throw new Error('Only admins can view system stats')
+  }
+
+  // Get counts in parallel
+  const [
+    usersResult,
+    programsResult,
+    invitesResult,
+    participantsResult,
+    managersResult,
+    adminsResult
+  ] = await Promise.all([
+    supabase.from('profiles').select('id', { count: 'exact', head: true }),
+    supabase.from('programs').select('id', { count: 'exact', head: true }).eq('status', 'active'),
+    supabase.from('invites').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+    supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('role', 'participant'),
+    supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('role', 'program_manager'),
+    supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('role', 'admin')
+  ])
+
+  return {
+    totalUsers: usersResult.count || 0,
+    totalPrograms: programsResult.count || 0,
+    activePrograms: programsResult.count || 0,
+    pendingInvites: invitesResult.count || 0,
+    totalParticipants: participantsResult.count || 0,
+    totalManagers: managersResult.count || 0,
+    totalAdmins: adminsResult.count || 0
+  }
+}

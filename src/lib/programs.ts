@@ -9,6 +9,7 @@
  */
 
 import { supabase } from './supabase'
+import { logAuditEvent } from './audit'
 
 /**
  * Get all programs for the current user
@@ -38,6 +39,7 @@ export async function getMyPrograms() {
       profiles:participant_id (
         id,
         name,
+        email,
         phone
       )
     )
@@ -70,7 +72,7 @@ export async function getMyPrograms() {
     if (enrollError) throw enrollError
 
     // Extract programs from enrollments
-    return (enrollments || []).map(item => ({
+    return ((enrollments || []) as any[]).map(item => ({
       ...item.program,
       enrollment_status: item.status,
       enrolled_at: item.enrolled_at
@@ -86,7 +88,7 @@ export async function getMyPrograms() {
 /**
  * Get a single program by ID with all participants
  */
-export async function getProgram(programId: string) {
+export async function getProgram(programId: string): Promise<any> {
   const { data, error } = await supabase
     .from('programs')
     .select(`
@@ -101,17 +103,19 @@ export async function getProgram(programId: string) {
         status,
         enrolled_at,
         profiles:participant_id (
-          id,
-          name,
-          role,
-          phone
-        )
+        id,
+        name,
+        role,
+        email,
+        phone
+      )
       )
     `)
     .eq('id', programId)
     .single()
 
   if (error) throw error
+  if (!data) throw new Error('Program not found')
   return data
 }
 
@@ -136,6 +140,7 @@ export async function addParticipantToProgram(
       .insert({
         program_id: programId,
         email: participantEmail.toLowerCase().trim(),
+        target_role: 'participant',
         status: 'pending'
       })
       .select()
@@ -147,6 +152,16 @@ export async function addParticipantToProgram(
       }
       throw inviteError
     }
+
+    await logAuditEvent({
+      action: 'CREATE_PARTICIPANT_INVITE',
+      programId,
+      metadata: {
+        inviteId: invite.id,
+        email: participantEmail.toLowerCase().trim(),
+        targetRole: 'participant'
+      }
+    })
 
     return {
       success: true,
@@ -161,6 +176,11 @@ export async function addParticipantToProgram(
   if (userIds && userIds.length > 0) {
     const userId = userIds[0].id
     const userName = userIds[0].name
+    const userRole = userIds[0].role
+
+    if (userRole && userRole !== 'participant') {
+      throw new Error('Only participant accounts can be enrolled in programs')
+    }
 
     // User exists - add them directly
     const { data, error } = await supabase
@@ -181,6 +201,15 @@ export async function addParticipantToProgram(
       throw error
     }
 
+    await logAuditEvent({
+      action: 'ADD_PARTICIPANT',
+      targetUserId: userId,
+      programId,
+      metadata: {
+        email: participantEmail.toLowerCase().trim()
+      }
+    })
+
     return {
       success: true,
       enrolled: true,
@@ -193,6 +222,7 @@ export async function addParticipantToProgram(
       .insert({
         program_id: programId,
         email: participantEmail.toLowerCase().trim(),
+        target_role: 'participant',
         status: 'pending'
       })
       .select()
@@ -204,6 +234,16 @@ export async function addParticipantToProgram(
       }
       throw error
     }
+
+    await logAuditEvent({
+      action: 'CREATE_PARTICIPANT_INVITE',
+      programId,
+      metadata: {
+        inviteId: invite.id,
+        email: participantEmail.toLowerCase().trim(),
+        targetRole: 'participant'
+      }
+    })
 
     return {
       success: true,
@@ -230,6 +270,11 @@ export async function removeParticipantFromProgram(
     .eq('participant_id', participantId)
 
   if (error) throw error
+  await logAuditEvent({
+    action: 'REMOVE_PARTICIPANT',
+    targetUserId: participantId,
+    programId
+  })
   return { success: true }
 }
 
@@ -257,6 +302,14 @@ export async function createProgram(program: {
     .single()
 
   if (error) throw error
+  if (!data) throw new Error('Program was not created')
+  await logAuditEvent({
+    action: 'CREATE_PROGRAM',
+    programId: data.id,
+    metadata: {
+      programName: data.name
+    }
+  })
   return data
 }
 
@@ -282,6 +335,12 @@ export async function updateProgram(
     .single()
 
   if (error) throw error
+  if (!data) throw new Error('Program was not updated')
+  await logAuditEvent({
+    action: 'UPDATE_PROGRAM',
+    programId,
+    metadata: updates
+  })
   return data
 }
 
@@ -297,6 +356,14 @@ export async function deleteProgram(programId: string) {
     .single()
 
   if (error) throw error
+  if (!data) throw new Error('Program was not completed')
+  await logAuditEvent({
+    action: 'COMPLETE_PROGRAM',
+    programId,
+    metadata: {
+      previousStatus: data.status
+    }
+  })
   return data
 }
 
@@ -425,21 +492,7 @@ export async function deleteExpense(expenseId: string) {
  */
 export async function getInviteDetails(inviteCode: string) {
   const { data, error } = await supabase
-    .from('invites')
-    .select(`
-      *,
-      program:program_id (
-        id,
-        name,
-        description,
-        start_date,
-        end_date
-      )
-    `)
-    .eq('invite_code', inviteCode)
-    .eq('status', 'pending')
-    .gt('expires_at', new Date().toISOString())
-    .single()
+    .rpc('get_invite_by_code', { p_invite_code: inviteCode })
 
   if (error) {
     if (error.code === 'PGRST116') {
@@ -448,13 +501,35 @@ export async function getInviteDetails(inviteCode: string) {
     throw error
   }
 
-  return data
+  const invite = Array.isArray(data) ? data[0] : data
+
+  if (!invite) {
+    return null
+  }
+
+  return {
+    invite_code: invite.invite_code,
+    email: invite.email,
+    invitee_name: invite.invitee_name,
+    target_role: invite.target_role,
+    expires_at: invite.expires_at,
+    program_id: invite.program_id,
+    program: invite.program_id
+      ? {
+          id: invite.program_id,
+          name: invite.program_name,
+          description: invite.program_description,
+          start_date: invite.program_start_date,
+          end_date: invite.program_end_date
+        }
+      : null
+  }
 }
 
 /**
  * Accept an invite after signup
  */
-export async function acceptInvite(inviteCode: string, userId: string) {
+export async function acceptInvite(inviteCode: string, userId: string): Promise<boolean> {
   const { data, error } = await supabase
     .rpc('accept_invite', {
       p_invite_code: inviteCode,
@@ -462,7 +537,7 @@ export async function acceptInvite(inviteCode: string, userId: string) {
     })
 
   if (error) throw error
-  return data
+  return !!data
 }
 
 /**
@@ -483,12 +558,27 @@ export async function getProgramInvites(programId: string) {
  * Cancel/delete an invite
  */
 export async function cancelInvite(inviteId: string) {
+  const { data: invite } = await supabase
+    .from('invites')
+    .select('program_id, email, target_role')
+    .eq('id', inviteId)
+    .single()
+
   const { error } = await supabase
     .from('invites')
     .update({ status: 'expired' })
     .eq('id', inviteId)
 
   if (error) throw error
+  await logAuditEvent({
+    action: 'CANCEL_INVITE',
+    programId: invite?.program_id || null,
+    metadata: {
+      inviteId,
+      email: invite?.email,
+      targetRole: invite?.target_role
+    }
+  })
   return { success: true }
 }
 
@@ -631,6 +721,16 @@ export async function createRoleInvite(
     throw error
   }
 
+  await logAuditEvent({
+    action: 'CREATE_ROLE_INVITE',
+    programId: programId || null,
+    metadata: {
+      inviteId: invite.id,
+      email: email.toLowerCase().trim(),
+      targetRole
+    }
+  })
+
   return {
     success: true,
     inviteCode: invite.invite_code,
@@ -669,6 +769,13 @@ export async function updateUserRole(userId: string, newRole: 'participant' | 'p
     .single()
 
   if (error) throw error
+  await logAuditEvent({
+    action: 'UPDATE_USER_ROLE',
+    targetUserId: userId,
+    metadata: {
+      newRole
+    }
+  })
   return data
 }
 

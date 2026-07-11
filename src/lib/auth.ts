@@ -17,7 +17,12 @@ export interface SignUpData {
   email: string
   password: string
   name: string
-  role: 'admin' | 'program_manager' | 'participant'
+  phone?: string
+}
+
+export interface UpdateProfileData {
+  name?: string
+  email?: string
   phone?: string
 }
 
@@ -97,17 +102,19 @@ export async function signInWithMagicLink(email: string) {
  * Sign up new user
  * Creates auth user and profile record
  */
-export async function signUp({ email, password, name, role, phone }: SignUpData) {
+export async function signUp({ email, password, name, phone }: SignUpData) {
   // Create auth user
-  // Note: Profile is created automatically by database trigger (handle_new_user)
-  // The trigger extracts name, role, and phone from raw_user_meta_data
+  // Note: Profile is created automatically by database trigger (handle_new_user).
+  // The trigger derives `role` SOLELY from an email-matched invite and IGNORES any
+  // client-supplied role in user_metadata. Therefore we intentionally do NOT send
+  // `role` here — doing so would be inert and misleadingly imply the client controls
+  // the role. Only `name` and `phone` are forwarded for the trigger to populate.
   const { data: authData, error: authError } = await supabase.auth.signUp({
     email,
     password,
     options: {
       data: {
         name,
-        role,
         phone,
       },
     },
@@ -203,6 +210,70 @@ export async function updatePassword(newPassword: string) {
   }
 
   return data
+}
+
+/**
+ * Update profile details and optionally request an email change.
+ * Name/phone update the profiles table immediately.
+ * Email changes go through Supabase auth and may require confirmation.
+ */
+export async function updateProfile({ name, email, phone }: UpdateProfileData) {
+  const { data: authData, error: authError } = await supabase.auth.getUser()
+
+  if (authError) {
+    throw new Error(authError.message)
+  }
+
+  const user = authData.user
+  if (!user) {
+    throw new Error('No authenticated user found')
+  }
+
+  const profileUpdates: Record<string, string | null> = {}
+
+  if (typeof name === 'string') {
+    profileUpdates.name = name.trim()
+  }
+
+  if (typeof phone === 'string') {
+    const trimmedPhone = phone.trim()
+    profileUpdates.phone = trimmedPhone.length > 0 ? trimmedPhone : null
+  }
+
+  if (Object.keys(profileUpdates).length > 0) {
+    const { error: profileError } = await supabase
+      .from('profiles')
+      .update(profileUpdates)
+      .eq('id', user.id)
+
+    if (profileError) {
+      throw new Error(profileError.message)
+    }
+  }
+
+  let emailChangeRequested = false
+
+  if (typeof email === 'string') {
+    const normalizedEmail = email.trim().toLowerCase()
+    if (normalizedEmail && normalizedEmail !== (user.email || '').toLowerCase()) {
+      const { error: emailError } = await supabase.auth.updateUser({
+        email: normalizedEmail,
+      })
+
+      if (emailError) {
+        throw new Error(emailError.message)
+      }
+
+      emailChangeRequested = true
+    }
+  }
+
+  const profile = await getUserProfileSecure()
+
+  return {
+    profile,
+    emailChangeRequested,
+  }
 }
 
 /**

@@ -6,6 +6,7 @@
  */
 
 import { createClient } from '@supabase/supabase-js'
+import type { Database } from './database.types'
 
 // Get environment variables
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || import.meta.env.NEXT_PUBLIC_SUPABASE_URL
@@ -25,7 +26,7 @@ if (!supabaseUrl || !supabaseAnonKey) {
  * Supabase client instance
  * Configured with auto-refresh tokens and session persistence
  */
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
   auth: {
     autoRefreshToken: true,
     persistSession: true,

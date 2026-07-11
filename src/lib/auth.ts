@@ -198,6 +198,30 @@ export async function resetPassword(email: string) {
 }
 
 /**
+ * Validate a proposed new password against the app's password policy.
+ *
+ * Rules (unchanged from the previously duplicated inline checks):
+ *   - Must be at least 6 characters (rejects length < 6).
+ *   - When a confirmation value is provided, it must match exactly.
+ *
+ * Returns the error message to display, or null when the password is valid.
+ * Messages match the account/reset password pages verbatim (with trailing
+ * periods). LoginSupabase historically uses period-less variants and keeps its
+ * own literal messages to avoid changing user-visible text.
+ */
+export function validateNewPassword(password: string, confirm?: string): string | null {
+  if (password.length < 6) {
+    return 'Password must be at least 6 characters.'
+  }
+
+  if (confirm !== undefined && password !== confirm) {
+    return 'Passwords do not match.'
+  }
+
+  return null
+}
+
+/**
  * Update password
  */
 export async function updatePassword(newPassword: string) {

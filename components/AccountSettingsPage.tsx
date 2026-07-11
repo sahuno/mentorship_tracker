@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { User } from '../types';
-import { getUserProfileSecure, updatePassword, updateProfile } from '../src/lib/auth';
+import { getUserProfileSecure, updatePassword, updateProfile, validateNewPassword } from '../src/lib/auth';
 
 interface AccountSettingsPageProps {
   user: User;
@@ -89,13 +89,9 @@ const AccountSettingsPage: React.FC<AccountSettingsPageProps> = ({
     setPasswordError('');
     setPasswordSuccess('');
 
-    if (newPassword.length < 6) {
-      setPasswordError('Password must be at least 6 characters.');
-      return;
-    }
-
-    if (newPassword !== confirmPassword) {
-      setPasswordError('Passwords do not match.');
+    const validationError = validateNewPassword(newPassword, confirmPassword);
+    if (validationError) {
+      setPasswordError(validationError);
       return;
     }
 

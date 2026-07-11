@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { getSession, resetPassword, updatePassword } from '../src/lib/auth';
+import { getSession, resetPassword, updatePassword, validateNewPassword } from '../src/lib/auth';
 
 const ResetPasswordPage: React.FC = () => {
   const [email, setEmail] = useState('');
@@ -42,13 +42,9 @@ const ResetPasswordPage: React.FC = () => {
     setError('');
     setSuccess('');
 
-    if (newPassword.length < 6) {
-      setError('Password must be at least 6 characters.');
-      return;
-    }
-
-    if (newPassword !== confirmPassword) {
-      setError('Passwords do not match.');
+    const validationError = validateNewPassword(newPassword, confirmPassword);
+    if (validationError) {
+      setError(validationError);
       return;
     }
 

@@ -24,8 +24,24 @@ dist-ssr
 supabase/.branches
 supabase/.temp
 
+# Database backups / dumps (never commit — may contain production user data)
+*.backup
+*.backup.gz
+*.dump
+*.sql.gz
+*.tar.gz
+db_cluster-*
+*pg_dump*
+
 # docs
-/docs
+/docs/*
+!/docs/GAP_REMEDIATION_PLAN.md
+!/docs/GAP_REMEDIATION_TODO.md
+!/docs/SECURITY_REMEDIATION.md
+
+# Tool / agent artifacts
+.codex/
+.playwright-mcp/
 
 #screenshots
 Screenshot*

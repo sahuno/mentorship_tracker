@@ -10,6 +10,7 @@ export interface User {
   id: string;
   name: string;
   email: string;
+  phone?: string;
   role?: UserRole; // Optional for backward compatibility
   programIds?: string[]; // Programs user is part of
   managedProgramIds?: string[]; // Programs user manages (for managers)
@@ -25,6 +26,7 @@ export interface Expense {
   date: string;
   item: string;
   amount: number;
+  category?: string;
   receiptUrl?: string; // Data URL for the image
   contact?: string;
   remarks?: string;
@@ -101,10 +103,13 @@ export interface Milestone {
   category: MilestoneCategory;
   startDate: string;
   endDate: string;
+  dueDate?: string;
+  completedDate?: string;
   status: MilestoneStatus;
   createdAt: string;
   progressReports: ProgressReport[];
   assignmentInfo?: AssignmentInfo; // Assignment details
+  managerFeedback?: ManagerFeedback[];
 }
 
 export interface MilestoneTemplate {

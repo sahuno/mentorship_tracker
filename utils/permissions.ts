@@ -140,7 +140,11 @@ export class PermissionManager {
   static getAccessibleUsers(user: User): User[] {
     if (user.role === UserRole.ADMIN) {
       // Admins can access all users
-      return UserManager.getUsers().map(({ passwordHash: _, ...u }) => u);
+      return [
+        ...UserManager.getUsersByRole(UserRole.ADMIN),
+        ...UserManager.getUsersByRole(UserRole.PROGRAM_MANAGER),
+        ...UserManager.getUsersByRole(UserRole.PARTICIPANT)
+      ];
     }
 
     if (user.role === UserRole.PROGRAM_MANAGER && user.managedProgramIds) {

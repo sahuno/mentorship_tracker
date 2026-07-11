@@ -388,11 +388,13 @@ CREATE POLICY "Admins can view all expenses" ON expenses
 2. **Email confirmations disabled** - Check Auth settings in Supabase dashboard
 3. **Rate limit reached** - Free tier has email sending limits
 4. **SMTP not configured** - Production should use custom SMTP (SendGrid, Resend, etc.)
+5. **Password reset / recovery throttled** - Supabase auth email recovery is rate-limited unless custom SMTP is configured
 
 **Solution**:
 - Check Supabase → Auth → Providers → Email settings
 - Verify "Confirm email" is enabled
 - Configure custom SMTP for production (recommended)
+- If password reset emails hit `over_email_send_rate_limit`, wire up custom SMTP to avoid the built-in recovery quota
 - Check Supabase logs for email errors
 
 ### Profile Not Created After Signup

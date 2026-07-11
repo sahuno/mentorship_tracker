@@ -6,6 +6,7 @@
 -- ============================================================================
 
 -- First, drop existing invite policies to avoid conflicts
+DROP POLICY IF EXISTS "Managers can view program invites" ON invites;
 DROP POLICY IF EXISTS "Managers can create invites" ON invites;
 DROP POLICY IF EXISTS "Managers can view their invites" ON invites;
 DROP POLICY IF EXISTS "Anyone can view invite by code" ON invites;

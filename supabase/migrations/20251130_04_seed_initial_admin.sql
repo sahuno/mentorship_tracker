@@ -10,6 +10,22 @@
 
 -- Create admin invitation
 -- When someone signs up with this email, they'll automatically get admin role
+--
+-- IDEMPOTENT / REPLAY-SAFE:
+-- Previously this migration did DELETE-pending + blind INSERT. On any re-run that
+-- (a) minted a NEW invite_code, invalidating any link already distributed, and
+-- (b) re-created a fresh 365-day pending admin invite even if the admin had
+-- already accepted their invite -- effectively re-opening a completed invite.
+--
+-- The unique index idx_invites_unique_pending is ON (program_id, email, status)
+-- WHERE status = 'pending'. Because admin invites have program_id = NULL and
+-- Postgres treats NULLs as distinct in unique indexes, that index does NOT
+-- prevent duplicate pending admin invites, so ON CONFLICT cannot be relied on
+-- here. Instead we guard with a NOT EXISTS check.
+--
+-- We only insert a pending admin invite when there is NOT already a pending OR
+-- accepted admin invite for this email. This preserves an existing invite_code
+-- on re-run and never clobbers or re-opens an already-accepted invite.
 INSERT INTO invites (
   id,
   program_id,
@@ -19,9 +35,9 @@ INSERT INTO invites (
   invited_by,
   status,
   expires_at,
-  created_at,
-  updated_at
-) VALUES (
+  created_at
+)
+SELECT
   gen_random_uuid(),
   NULL,  -- No program association for admin invite
   'ekwame001@gmail.com',  -- CHANGE THIS to your admin email
@@ -30,14 +46,13 @@ INSERT INTO invites (
   NULL,  -- No inviter (system-generated)
   'pending',
   NOW() + INTERVAL '365 days',  -- Long expiry for initial setup
-  NOW(),
   NOW()
-)
-ON CONFLICT (email) WHERE status = 'pending'
-DO UPDATE SET
-  target_role = 'admin',
-  expires_at = NOW() + INTERVAL '365 days',
-  updated_at = NOW();
+WHERE NOT EXISTS (
+  SELECT 1 FROM invites
+  WHERE email = 'ekwame001@gmail.com'
+    AND target_role = 'admin'
+    AND status IN ('pending', 'accepted')
+);
 
 -- ============================================================================
 -- Optional: Create additional initial invites

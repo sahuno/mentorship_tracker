@@ -10,11 +10,10 @@ import MilestoneTab from './tabs/MilestoneTab';
 import AssignmentsTab from './tabs/AssignmentsTab';
 import ProgramSelector from './ProgramSelector';
 import { getMyPrograms } from '../src/lib/programs';
-import { createBalanceCycle, getMyBalanceCycles } from '../src/lib/cycles';
+import { createBalanceCycle, getMyBalanceCyclesWithExpenses } from '../src/lib/cycles';
 import {
   createExpense,
   deleteExpense,
-  getExpenses,
   updateExpense
 } from '../src/lib/expenses';
 import {
@@ -26,7 +25,12 @@ import {
   updateAssignmentStatus,
   updateMilestoneAssignment
 } from '../src/lib/milestones';
-import { dbCycleToBalanceSheetCycle, dbExpenseToExpense } from '../src/lib/mappers';
+import {
+  dbCycleToBalanceSheetCycle,
+  dbExpenseToExpense,
+  expenseToDbInsert,
+  expenseToDbUpdate
+} from '../src/lib/mappers';
 import { logAuditEvent } from '../src/lib/audit';
 
 interface DashboardProps {
@@ -88,16 +92,12 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onAccountSettings
 
     try {
       setError(null);
-      const dbCycles = await getMyBalanceCycles(selectedProgram.id);
-      const cyclesWithExpenses = await Promise.all(
-        dbCycles.map(async (cycle: any) => {
-          const dbExpenses = await getExpenses(cycle.id);
-
-          return dbCycleToBalanceSheetCycle(
-            cycle,
-            dbExpenses.map((expense: any) => dbExpenseToExpense(expense))
-          );
-        })
+      const dbCycles = await getMyBalanceCyclesWithExpenses(selectedProgram.id);
+      const cyclesWithExpenses = dbCycles.map((cycle: any) =>
+        dbCycleToBalanceSheetCycle(
+          cycle,
+          (cycle.expenses || []).map((expense: any) => dbExpenseToExpense(expense))
+        )
       );
       const dbMilestones = await getMyMilestoneAssignments(selectedProgram.id);
 
@@ -189,26 +189,9 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onAccountSettings
     if (!activeCycle) return;
 
     if ('id' in expenseData) {
-      await updateExpense(expenseData.id, {
-        description: expenseData.item,
-        category: expenseData.category,
-        amount: expenseData.amount,
-        date: expenseData.date,
-        contact: expenseData.contact,
-        remarks: expenseData.remarks,
-        receipt_url: expenseData.receiptUrl
-      });
+      await updateExpense(expenseData.id, expenseToDbUpdate(expenseData));
     } else {
-      await createExpense({
-        cycle_id: activeCycle.id,
-        description: expenseData.item,
-        category: expenseData.category,
-        amount: expenseData.amount,
-        date: expenseData.date,
-        contact: expenseData.contact,
-        remarks: expenseData.remarks,
-        receipt_url: expenseData.receiptUrl
-      });
+      await createExpense(expenseToDbInsert(activeCycle.id, expenseData));
     }
 
     await loadProgramData();

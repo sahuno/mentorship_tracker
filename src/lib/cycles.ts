@@ -22,6 +22,25 @@ export async function getMyBalanceCycles(programId: string) {
   return data || []
 }
 
+// Same as getMyBalanceCycles but embeds each cycle's expenses in a single query
+// (avoids an N+1 of one getExpenses() call per cycle). Embedded expenses are
+// ordered by date descending to match the ordering getExpenses() applied before.
+export async function getMyBalanceCyclesWithExpenses(programId: string) {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+
+  const { data, error } = await supabase
+    .from('balance_cycles')
+    .select('*, expenses (*)')
+    .eq('program_id', programId)
+    .eq('participant_id', user.id)
+    .order('created_at', { ascending: false })
+    .order('date', { ascending: false, referencedTable: 'expenses' })
+
+  if (error) throw error
+  return data || []
+}
+
 export async function createBalanceCycle(cycle: BalanceCycleInsert) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) throw new Error('Not authenticated')

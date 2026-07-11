@@ -35,7 +35,8 @@
 | #9 | MEDIUM | Seed-admin migration non-idempotent, re-opens admin invite | ✅ DONE | `20251130_04` (idempotent); live checked clean | file + live check |
 | #10 | LOW/MED | Login routes to wrong dashboard from invite role | ✅ DONE | `LoginSupabase.tsx` | code in tree |
 | S3 | LOW | `find_user_by_email` leaks role | 🚫 DEFERRED | below confidence bar | — |
-| Cleanup | — | N+1 queries, duplication, dead weight (see below) | ⛔ OPEN | — | — |
+| Cleanup | — | N+1 queries, duplication, dead weight, dev proxy | ✅ MOSTLY DONE | 5 commits | code in tree |
+| Cleanup-dm | — | Duplicate milestone rows per participant (data-model) | ⛔ DEFERRED | needs design | — |
 | N1 | HIGH | Migration ledger diverged → `db push` unsafe | ⛔ OPEN | reconcile ledger | — |
 | N2 | HIGH | Storage-policy privilege blocks `_09` on this project | ✅ RESOLVED | bucket via SQL; policies → Dashboard script (optional) | — |
 | N3 | MED | Restored DB password unavailable + CLI login-role broken | ⛔ OPEN | needs user/password | — |
@@ -66,12 +67,12 @@
 - [x] ~~**#9 — MEDIUM · Seed-admin migration non-idempotent, re-opens admin invite.**~~ **FIXED** — `20251130_04` rewritten as `INSERT … WHERE NOT EXISTS (pending/accepted admin invite)`; preserves invite_code, never reopens an accepted invite. Live check: no stray admin invite for the seed email exists (clean).
 - [x] ~~**#10 — LOW/MEDIUM · Login routes to wrong dashboard from invite role.**~~ **FIXED** in `LoginSupabase.tsx` — sign-in path routes by the real profile role, not `inviteDetails.target_role`; App.tsx race is harmless because both `setUser` paths now carry the same correct role. Code in tree.
 
-### Cleanup themes (flagged by finders, cut by the 10-item cap) — DEFERRED to a follow-up round
-- [ ] ⛔ **N+1 queries:** `finance.ts` one query per participant; `Dashboard.tsx` one per cycle — both refetch fully after every mutation.
-- [ ] ⛔ **Duplicate milestone rows** created per participant instead of using the assignment junction table.
-- [ ] ⛔ **Duplication:** expense→DB row mapping (now partly addressed in FinancialOversightTab via #4, but Dashboard.tsx still hand-maps); password validation triplicated; `normalizeReceiptItem` duplicated across the two `receiptOcr` modules; ~55 lines of Supabase boilerplate duplicated across the two `api/` handlers.
-- [ ] ⛔ **Dead weight:** write-only `useLocalStorage` mirrors in `Dashboard.tsx`; legacy localStorage fallback branches in the tabs.
-- [ ] ⛔ **Dev proxy config:** `vite.plugins/receiptApiProxy.ts` reads `process.env` but `vite.config.ts` no longer loads `.env.local` into it → receipt uploads 500 in `npm run dev`.
+### Cleanup themes (agent round 2026-07-11 — 3 agents, committed on `security-remediation`)
+- [x] ~~**N+1 queries.**~~ **DONE** — `finance.getProgramParticipantFinancials` 1+N → 2 queries; `Dashboard.loadProgramData` 1+N → 1 (new `cycles.getMyBalanceCyclesWithExpenses`). Ordering/output shape preserved. Also routed `Dashboard.handleSaveExpense` through `mappers.expenseToDb*`.
+- [ ] ⛔ **DEFERRED — Duplicate milestone rows** created per participant instead of using the assignment junction table. This is a DATA-MODEL change (would alter how assignments + the delete-milestone-when-last-assignment logic work, and affects existing rows), not a pure cleanup. Needs its own design + possibly a migration. Not done this round.
+- [x] ~~**Duplication.**~~ **DONE** — `normalizeReceiptItem` deduped (exported from `receiptOcrShared`); ~55 lines of edge boilerplate + the cycle-authorization logic extracted to `api/_lib/supabaseServer.ts` (`canAccessCycle`), preserving per-handler error strings/order; password validation consolidated into `auth.validateNewPassword` (used by ResetPassword + AccountSettings). **Exception:** `LoginSupabase` password validation left as-is — its messages omit trailing periods, so deduping would change user-visible text.
+- [x] ~~**Dead weight (tabs).**~~ **DONE** — removed the provably-dead localStorage `else` fallback branches in Finance/Milestone/Assignments tabs (+ unused uuid imports). **CORRECTION:** the `useLocalStorage` cycle/milestone mirrors in `Dashboard.tsx` are **NOT dead** — they are read by `notificationManager.checkDeadlines` and `ReportsAnalytics`. Removing them would break deadline notifications and reports, so they were kept. (The original review's "write-only mirrors" finding was wrong.)
+- [x] ~~**Dev proxy config.**~~ **DONE** — `vite.config.ts` now loads `.env.local` server-side vars into `process.env` in `serve` (dev) mode only, so dev receipt uploads work; secrets never reach the client bundle; prod build untouched.
 
 ---
 
@@ -100,13 +101,14 @@
 | 2026-07-11 | delete leftover test admin + 2 test invites | Auth Admin API + mgmt API | ✅ verified (N6) |
 | 2026-07-11 | commit all working-tree work in 6 logical chunks | git branch `security-remediation` | ✅ (not merged/pushed) |
 | 2026-07-11 | create + configure private `receipts` bucket (10MB, image mimes) | mgmt API (storage.buckets) | ✅ verified (#1/N2) |
+| 2026-07-11 | cleanup round (N+1, dedup, dead code, dev proxy) — 5 commits | 3 agents; git branch | ✅ tsc clean (not merged) |
 
 Code-only fixes (#4 client, #6, #7, #8, #10) are committed on branch `security-remediation` (verified `tsc --noEmit` exit 0), NOT merged to `main` or deployed (see N4).
 
 ---
 
 ## Suggested next steps (in order)
-1. **Cleanup themes** — N+1 queries, duplication, dead weight, dev proxy (agent round IN PROGRESS 2026-07-11). NOTE: "duplicate milestone rows per participant" is a data-model change, not a pure cleanup — deferred, still open.
-2. **N1 / N3 / N5** — reconcile the migration ledger (needs the DB password) so `db push` becomes usable again.
-3. **N4** — realign environments, merge `security-remediation`, repoint + redeploy the app so the fixes reach users.
+1. **N1 / N3 / N5** — reconcile the migration ledger (needs the DB password) so `db push` becomes usable again.
+2. **N4** — realign environments, merge `security-remediation`, repoint + redeploy the app so the fixes reach users. **This is the highest-impact remaining item: all code fixes + cleanup sit on the branch and DB fixes are on the restored project, but the deployed app still points at the old inactive project, so users have none of this yet.**
+3. **Cleanup-dm** — design the milestone-assignment junction refactor (deferred data-model change).
 4. **(Optional)** apply `scripts/storage_receipts_policies.sql` via the Dashboard SQL editor for storage defense-in-depth.

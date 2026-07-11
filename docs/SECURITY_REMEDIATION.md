@@ -24,7 +24,7 @@
 | Backup | — | Prod DB dump in repo, not gitignored | ✅ DONE | moved out of repo + `.gitignore` | local |
 | S1 | HIGH | Privilege escalation via signup metadata | ✅ DONE | `20260620_10` | live DB |
 | S2 | MEDIUM | Notification forgery to any user | ✅ DONE | `20260620_12` | live DB |
-| #1 | HIGH | Receipt storage migration fails / rolls back | 🔧 NEEDS REWORK | `20260620_09` (approach invalid here) | — |
+| #1 | HIGH | Receipt storage migration fails / rolls back | ✅ DONE | `20260620_09` (bucket) + `scripts/storage_receipts_policies.sql` | bucket live |
 | #2 | HIGH | Participant self-milestones broken by RLS | ✅ DONE | `20260620_11` | live DB |
 | #3 | HIGH | Invited managers/admins silently become participants | ✅ DONE | `20260620_10` (email-match) | live DB |
 | #4 | HIGH | Manager expense delete/edit false success + bogus audit | ✅ DONE | `20260620_14` + `expenses.ts` + `FinancialOversightTab.tsx` | DB live; code in tree |
@@ -37,7 +37,7 @@
 | S3 | LOW | `find_user_by_email` leaks role | 🚫 DEFERRED | below confidence bar | — |
 | Cleanup | — | N+1 queries, duplication, dead weight (see below) | ⛔ OPEN | — | — |
 | N1 | HIGH | Migration ledger diverged → `db push` unsafe | ⛔ OPEN | reconcile ledger | — |
-| N2 | HIGH | Storage-policy privilege blocks `_09` on this project | ⛔ OPEN | Dashboard / storage-admin | — |
+| N2 | HIGH | Storage-policy privilege blocks `_09` on this project | ✅ RESOLVED | bucket via SQL; policies → Dashboard script (optional) | — |
 | N3 | MED | Restored DB password unavailable + CLI login-role broken | ⛔ OPEN | needs user/password | — |
 | N4 | HIGH | Vercel frontend points at OLD inactive project; code fixes undeployed | ⛔ OPEN | env realignment + redeploy | — |
 | N5 | LOW | Direct API fixes not recorded in migration ledger | ⛔ OPEN (accepted) | idempotent | — |
@@ -55,7 +55,7 @@
 
 ## Part 2 — Code review (diff + new files)
 
-- [ ] 🔧 **#1 — HIGH · Receipt storage migration fails and rolls back.** `20260620_09`. NEEDS REWORK — the `SET ROLE supabase_storage_admin` approach does NOT work on this project (postgres is not a member; see N2). `receipts` bucket still absent. Rework: create bucket in SQL; create storage policies via Dashboard → Storage → Policies.
+- [x] ~~**#1 — HIGH · Receipt storage migration fails and rolls back.**~~ **FIXED** — reworked `20260620_09` to only create/configure the private `receipts` bucket (public=false, 10MB, image mimes), which `postgres` CAN do via `storage.buckets`; this is `db push`-safe and idempotent. Bucket created + configured LIVE and verified. The direct-client `storage.objects` RLS policies (which postgres cannot create; N2) moved to `scripts/storage_receipts_policies.sql` for optional Dashboard application — they're defense-in-depth only, since the browser never touches Storage directly (uploads/views go through service-role edge functions that authorize per-request; the bucket is private). Discovery that reframed this: the private bucket + edge functions are the real boundary, not client-side storage RLS.
 - [x] ~~**#2 — HIGH · Participant self-milestones broken by RLS.**~~ **FIXED** by `20260620_11` (LIVE) — `milestones.created_by DEFAULT auth.uid()` + participant policies; 5 rows backfilled.
 - [x] ~~**#3 — HIGH · Invited managers/admins silently become participants.**~~ **FIXED** by `20260620_10` (LIVE) — email-matched invites; inert signup `role` metadata also removed from `auth.ts` (Agent C).
 - [x] ~~**#4 — HIGH · Manager expense delete/edit false success + bogus audit + dropped fields.**~~ **FIXED**: (a) `20260620_14` (LIVE) adds manager INSERT/UPDATE/DELETE RLS on `expenses` scoped via `can_manage_program(cycle→program)`; (b) `expenses.ts` `deleteExpense`/`updateExpense` now `.select()` and throw if 0 rows affected (blocked writes fail loudly); (c) `FinancialOversightTab.tsx` handlers wrapped in try/catch, success/audit only after real success, and add/edit routed through `mappers.ts` so `category`/`receipt_url` persist. Verified: manager write RLS functional in ephemeral PG (owning-manager delete affects 1 row, outsider 0). Code in tree.
@@ -78,7 +78,7 @@
 ## Cross-cutting issues that surfaced during remediation (NEW — not in the original reviews)
 
 - [ ] ⛔ **N1 — HIGH · Migration ledger diverged from schema → `db push` is UNSAFE.** `schema_migrations` records only 4 migrations (through `20251029214441`); the schema already has objects from ~all later migrations (applied manually). `db push` would replay them and fail/corrupt. Fix: reconcile via `supabase migration repair --status applied <version>` for each already-applied migration before any push. Blocked by N3.
-- [ ] ⛔ **N2 — HIGH · Storage-policy privilege blocks `_09` on this project.** `postgres` is NOT a member of `supabase_storage_admin`; the admin API runs as non-superuser `postgres`. Create receipt storage policies via Dashboard → Storage → Policies (or a `supabase_admin` connection). Ties to #1.
+- [x] ~~**N2 — HIGH · Storage-policy privilege blocks `_09` on this project.**~~ **RESOLVED** — bucket creation works as `postgres` via `storage.buckets` (kept in `_09`). The `storage.objects` RLS policies (which need `supabase_storage_admin`) are optional defense-in-depth and live in `scripts/storage_receipts_policies.sql` for Dashboard application. Not blocking, since access is mediated by service-role edge functions.
 - [ ] ⛔ **N3 — MEDIUM · Restored DB password unavailable + CLI login-role broken.** Blocks `supabase db push`/`migration list/repair`/psql. Management-API-as-postgres is the working path for public-schema DDL.
 - [ ] ⛔ **N4 — HIGH · Vercel frontend points at OLD inactive project; code fixes undeployed.** Deployed bundle (`b5b2a79`) has `uedwlvucyyxjenoggpwu` (INACTIVE) baked in; local + fixes target `rlqaoecdzkrshidpljwb`. All code fixes (#4 client, #6, #7, #8, #10) sit in the working tree, uncommitted/undeployed. Fix: pick the canonical project, realign Vercel + `.env.local`, commit, redeploy.
 - [ ] ⛔ **N5 — LOW (accepted) · Direct API fixes not recorded in the ledger.** `_10/_11/_12/_13/_14` applied via management API, absent from `schema_migrations`. All idempotent. Fold into N1 reconciliation.
@@ -99,13 +99,14 @@
 | 2026-07-11 | read-only check: no stray admin invite for seed email | mgmt API as postgres | ✅ clean (#9) |
 | 2026-07-11 | delete leftover test admin + 2 test invites | Auth Admin API + mgmt API | ✅ verified (N6) |
 | 2026-07-11 | commit all working-tree work in 6 logical chunks | git branch `security-remediation` | ✅ (not merged/pushed) |
+| 2026-07-11 | create + configure private `receipts` bucket (10MB, image mimes) | mgmt API (storage.buckets) | ✅ verified (#1/N2) |
 
 Code-only fixes (#4 client, #6, #7, #8, #10) are committed on branch `security-remediation` (verified `tsc --noEmit` exit 0), NOT merged to `main` or deployed (see N4).
 
 ---
 
 ## Suggested next steps (in order)
-1. **#1 / N2** — rework `_09` into a Dashboard-ready storage policy script.
-2. **Cleanup themes** — N+1 queries, duplication, dead weight, dev proxy (follow-up agent round).
-3. **N1 / N3 / N5** — reconcile the migration ledger (needs the DB password) so `db push` becomes usable again.
-4. **N4** — realign environments, merge `security-remediation`, repoint + redeploy the app so the code fixes reach users.
+1. **Cleanup themes** — N+1 queries, duplication, dead weight, dev proxy (agent round IN PROGRESS 2026-07-11). NOTE: "duplicate milestone rows per participant" is a data-model change, not a pure cleanup — deferred, still open.
+2. **N1 / N3 / N5** — reconcile the migration ledger (needs the DB password) so `db push` becomes usable again.
+3. **N4** — realign environments, merge `security-remediation`, repoint + redeploy the app so the fixes reach users.
+4. **(Optional)** apply `scripts/storage_receipts_policies.sql` via the Dashboard SQL editor for storage defense-in-depth.

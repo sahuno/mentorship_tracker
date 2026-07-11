@@ -1,21 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { User, BalanceSheetCycle, Expense, UserRole } from '../types';
-import ProgramManager from '../utils/programManager';
-import PermissionManager from '../utils/permissions';
-import { v4 as uuidv4 } from 'uuid';
+import { createExpense, deleteExpense, updateExpense } from '../src/lib/expenses';
+import {
+  getProgramParticipantFinancials,
+  ParticipantFinancials
+} from '../src/lib/finance';
+import { expenseToDbInsert, expenseToDbUpdate } from '../src/lib/mappers';
+import { logAuditEvent } from '../src/lib/audit';
 
 interface FinancialOversightTabProps {
   programId: string;
   managerId: string;
   managerUser: User;
-}
-
-interface ParticipantFinancials {
-  participant: User;
-  cycles: BalanceSheetCycle[];
-  activeCycle: BalanceSheetCycle | null;
-  totalSpent: number;
-  totalBudget: number;
 }
 
 const FinancialOversightTab: React.FC<FinancialOversightTabProps> = ({
@@ -30,102 +26,87 @@ const FinancialOversightTab: React.FC<FinancialOversightTabProps> = ({
   const [editAmount, setEditAmount] = useState('');
   const [showAddExpense, setShowAddExpense] = useState(false);
   const [newExpense, setNewExpense] = useState({ item: '', amount: '', date: new Date().toISOString().split('T')[0], contact: '', remarks: '' });
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   // Load participant financial data
   useEffect(() => {
-    const program = ProgramManager.getProgramById(programId);
-    if (!program) return;
-
-    const participants = ProgramManager.getParticipantsInProgram(programId);
-    const financials: ParticipantFinancials[] = participants.map(participant => {
-      const cyclesKey = `gbw_cycles_${participant.id}`;
-      const cyclesData = localStorage.getItem(cyclesKey);
-      const cycles = cyclesData ? JSON.parse(cyclesData) : [];
-      const activeCycle = cycles.find((c: BalanceSheetCycle) => c.isActive) || null;
-      const totalSpent = cycles.reduce((sum: number, cycle: BalanceSheetCycle) =>
-        sum + cycle.expenses.reduce((expSum: number, exp: Expense) => expSum + exp.amount, 0), 0
-      );
-      const totalBudget = cycles.reduce((sum: number, cycle: BalanceSheetCycle) => sum + cycle.budget, 0);
-
-      return {
-        participant,
-        cycles,
-        activeCycle,
-        totalSpent,
-        totalBudget
-      };
-    });
-
-    setParticipantFinancials(financials);
+    loadFinancials();
   }, [programId]);
 
-  const handleEditExpense = (participantId: string, cycleId: string, expenseId: string, newAmount: number) => {
+  const loadFinancials = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const financials = await getProgramParticipantFinancials(programId);
+      setParticipantFinancials(financials);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load financial oversight data');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleEditExpense = async (participantId: string, cycleId: string, expenseId: string, newAmount: number) => {
     if (!editReason.trim()) {
       alert('Please provide a reason for editing');
       return;
     }
 
-    // Update the expense
-    const cyclesKey = `gbw_cycles_${participantId}`;
-    const cyclesData = localStorage.getItem(cyclesKey);
-    if (!cyclesData) return;
+    if (Number.isNaN(newAmount)) {
+      alert('Please provide a valid amount');
+      return;
+    }
 
-    const cycles = JSON.parse(cyclesData);
-    const cycleIndex = cycles.findIndex((c: BalanceSheetCycle) => c.id === cycleId);
-    if (cycleIndex === -1) return;
+    const existingFinancials = participantFinancials.find((pf) => pf.participant.id === participantId);
+    const existingCycle = existingFinancials?.cycles.find((cycle) => cycle.id === cycleId);
+    const existingExpense = existingCycle?.expenses.find((expense) => expense.id === expenseId);
 
-    const expenseIndex = cycles[cycleIndex].expenses.findIndex((e: Expense) => e.id === expenseId);
-    if (expenseIndex === -1) return;
+    if (!existingExpense) {
+      alert('Unable to locate the expense to edit. Please refresh and try again.');
+      return;
+    }
 
-    const oldAmount = cycles[cycleIndex].expenses[expenseIndex].amount;
-    cycles[cycleIndex].expenses[expenseIndex].amount = newAmount;
+    const oldAmount = existingExpense.amount;
 
-    localStorage.setItem(cyclesKey, JSON.stringify(cycles));
+    try {
+      // Route through the shared mapper so category/receipt_url (and every other
+      // field) are preserved on write rather than being silently dropped.
+      const updatedExpense = { ...existingExpense, amount: newAmount };
+      await updateExpense(expenseId, expenseToDbUpdate(updatedExpense));
 
-    // Log the audit action
-    PermissionManager.logAuditAction(
-      managerId,
-      'EDIT_EXPENSE',
-      participantId,
-      {
-        cycleId,
-        expenseId,
-        oldAmount,
-        newAmount,
-        reason: editReason.trim()
-      }
-    );
+      // Only write the audit event after the mutation truly succeeded.
+      await logAuditEvent({
+        action: 'EDIT_EXPENSE',
+        targetUserId: participantId,
+        programId,
+        metadata: {
+          cycleId,
+          expenseId,
+          oldAmount,
+          newAmount,
+          reason: editReason.trim()
+        }
+      });
 
-    // Update state
-    setParticipantFinancials(prev => prev.map(pf => {
-      if (pf.participant.id === participantId) {
-        return { ...pf, cycles };
-      }
-      return pf;
-    }));
+      await loadFinancials();
 
-    setEditingExpense(null);
-    setEditReason('');
-    setEditAmount('');
-    alert('Expense updated successfully');
+      setEditingExpense(null);
+      setEditReason('');
+      setEditAmount('');
+      alert('Expense updated successfully');
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to update expense. Please try again.');
+    }
   };
 
-  const handleAddExpense = (participantId: string, cycleId: string) => {
+  const handleAddExpense = async (participantId: string, cycleId: string) => {
     if (!newExpense.item.trim() || !newExpense.amount) {
       alert('Please provide item name and amount');
       return;
     }
 
-    const cyclesKey = `gbw_cycles_${participantId}`;
-    const cyclesData = localStorage.getItem(cyclesKey);
-    if (!cyclesData) return;
-
-    const cycles = JSON.parse(cyclesData);
-    const cycleIndex = cycles.findIndex((c: BalanceSheetCycle) => c.id === cycleId);
-    if (cycleIndex === -1) return;
-
-    const expense: Expense = {
-      id: uuidv4(),
+    const expense: Omit<Expense, 'id'> = {
       date: newExpense.date,
       item: newExpense.item.trim(),
       amount: parseFloat(newExpense.amount),
@@ -133,73 +114,65 @@ const FinancialOversightTab: React.FC<FinancialOversightTabProps> = ({
       remarks: newExpense.remarks.trim() || undefined
     };
 
-    cycles[cycleIndex].expenses.push(expense);
-    localStorage.setItem(cyclesKey, JSON.stringify(cycles));
+    try {
+      // Route through the shared mapper so category/receipt_url are preserved and
+      // the insert shape cannot drift from the schema.
+      await createExpense(expenseToDbInsert(cycleId, expense));
 
-    // Log the audit action
-    PermissionManager.logAuditAction(
-      managerId,
-      'ADD_EXPENSE',
-      participantId,
-      {
-        cycleId,
-        expense,
-        addedBy: 'manager'
-      }
-    );
+      // Only write the audit event after the mutation truly succeeded.
+      await logAuditEvent({
+        action: 'ADD_EXPENSE',
+        targetUserId: participantId,
+        programId,
+        metadata: {
+          cycleId,
+          expense,
+          addedBy: 'manager'
+        }
+      });
 
-    // Update state
-    setParticipantFinancials(prev => prev.map(pf => {
-      if (pf.participant.id === participantId) {
-        return { ...pf, cycles };
-      }
-      return pf;
-    }));
+      await loadFinancials();
 
-    setShowAddExpense(false);
-    setNewExpense({ item: '', amount: '', date: new Date().toISOString().split('T')[0], contact: '', remarks: '' });
-    alert('Expense added successfully');
+      setShowAddExpense(false);
+      setNewExpense({ item: '', amount: '', date: new Date().toISOString().split('T')[0], contact: '', remarks: '' });
+      alert('Expense added successfully');
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to add expense. Please try again.');
+    }
   };
 
-  const handleDeleteExpense = (participantId: string, cycleId: string, expenseId: string) => {
+  const handleDeleteExpense = async (participantId: string, cycleId: string, expenseId: string) => {
     const reason = prompt('Please provide a reason for deleting this expense:');
     if (!reason) return;
 
-    const cyclesKey = `gbw_cycles_${participantId}`;
-    const cyclesData = localStorage.getItem(cyclesKey);
-    if (!cyclesData) return;
+    const existingFinancials = participantFinancials.find((pf) => pf.participant.id === participantId);
+    const existingCycle = existingFinancials?.cycles.find((cycle) => cycle.id === cycleId);
+    const expense = existingCycle?.expenses.find((entry) => entry.id === expenseId);
 
-    const cycles = JSON.parse(cyclesData);
-    const cycleIndex = cycles.findIndex((c: BalanceSheetCycle) => c.id === cycleId);
-    if (cycleIndex === -1) return;
+    try {
+      // deleteExpense now throws if zero rows were affected (e.g. RLS-blocked),
+      // so a blocked delete lands here instead of reporting a false success.
+      await deleteExpense(expenseId);
 
-    const expense = cycles[cycleIndex].expenses.find((e: Expense) => e.id === expenseId);
-    cycles[cycleIndex].expenses = cycles[cycleIndex].expenses.filter((e: Expense) => e.id !== expenseId);
+      // Only write the audit event after the delete truly succeeded.
+      await logAuditEvent({
+        action: 'DELETE_EXPENSE',
+        targetUserId: participantId,
+        programId,
+        metadata: {
+          cycleId,
+          expenseId,
+          expense,
+          reason
+        }
+      });
 
-    localStorage.setItem(cyclesKey, JSON.stringify(cycles));
+      await loadFinancials();
 
-    // Log the audit action
-    PermissionManager.logAuditAction(
-      managerId,
-      'DELETE_EXPENSE',
-      participantId,
-      {
-        cycleId,
-        expenseId,
-        expense,
-        reason
-      }
-    );
-
-    // Update state
-    setParticipantFinancials(prev => prev.map(pf => {
-      if (pf.participant.id === participantId) {
-        return { ...pf, cycles };
-      }
-      return pf;
-    }));
-
-    alert('Expense deleted successfully');
+      alert('Expense deleted successfully');
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to delete expense. Please try again.');
+    }
   };
 
   const formatCurrency = (amount: number) => {
@@ -232,6 +205,16 @@ const FinancialOversightTab: React.FC<FinancialOversightTabProps> = ({
 
   return (
     <div className="space-y-6">
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md text-sm">
+          {error}
+        </div>
+      )}
+      {loading && (
+        <div className="bg-white shadow rounded-lg p-6 text-gray-600">
+          Loading financial data...
+        </div>
+      )}
       <div className="bg-white shadow rounded-lg">
         <div className="p-6">
           <h3 className="text-lg font-medium text-gray-900 mb-4">Financial Overview</h3>

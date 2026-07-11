@@ -1,9 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { User, Milestone, MilestoneStatus, BalanceSheetCycle, Expense } from '../types';
 import CloseIcon from './icons/CloseIcon';
-import ProgramManager from '../utils/programManager';
-import PermissionManager from '../utils/permissions';
-import NotificationManager from '../utils/notificationManager';
+import { getProgram } from '../src/lib/programs';
+import { getParticipantCycles } from '../src/lib/finance';
+import { addManagerFeedback, getParticipantMilestones } from '../src/lib/milestones';
+import { dbProfileToUser } from '../src/lib/mappers';
+import { logAuditEvent } from '../src/lib/audit';
+import { notifyFeedback } from '../src/lib/notifications';
 
 interface ParticipantDetailsModalProps {
   participantId: string;
@@ -24,37 +27,41 @@ const ParticipantDetailsModal: React.FC<ParticipantDetailsModalProps> = ({
   const [activeTab, setActiveTab] = useState<'overview' | 'milestones' | 'progress' | 'finance'>('overview');
   const [feedback, setFeedback] = useState('');
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const modalRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // Load participant data
-    const participantData = localStorage.getItem(`gbw_users_v2`);
-    if (participantData) {
-      const users = JSON.parse(participantData);
-      const user = users.find((u: any) => u.id === participantId);
-      if (user) {
-        const { passwordHash, ...userWithoutPassword } = user;
-        setParticipant(userWithoutPassword);
-      }
-    }
-
-    // Load milestones
-    const milestoneKey = `gbw_milestones_${participantId}`;
-    const milestonesData = localStorage.getItem(milestoneKey);
-    if (milestonesData) {
-      const allMilestones = JSON.parse(milestonesData);
-      const programMilestones = allMilestones.filter((m: Milestone) => m.programId === programId);
-      setMilestones(programMilestones);
-    }
-
-    // Load financial data
-    const cyclesKey = `gbw_cycles_${participantId}`;
-    const cyclesData = localStorage.getItem(cyclesKey);
-    if (cyclesData) {
-      setCycles(JSON.parse(cyclesData));
-    }
+    loadParticipantDetails();
   }, [participantId, programId]);
+
+  const loadParticipantDetails = async () => {
+    try {
+      setError(null);
+      const [programData, milestoneData, cycleData] = await Promise.all([
+        getProgram(programId),
+        getParticipantMilestones(programId, participantId),
+        getParticipantCycles(programId, participantId)
+      ]);
+      if (!programData) throw new Error('Program not found');
+
+      const enrollment = (programData?.program_participants || []).find(
+        (entry: any) => entry.participant_id === participantId
+      );
+
+      if (enrollment?.profiles) {
+        setParticipant(dbProfileToUser({
+          ...enrollment.profiles,
+          email: enrollment.profiles.email || ''
+        }));
+      }
+
+      setMilestones(milestoneData);
+      setCycles(cycleData);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load participant details');
+    }
+  };
 
   // Accessibility: Escape key
   useEffect(() => {
@@ -70,68 +77,39 @@ const ParticipantDetailsModal: React.FC<ParticipantDetailsModalProps> = ({
     };
   }, [onClose]);
 
-  const handleProvideFeedback = (milestoneId: string, reportId: string) => {
+  const handleProvideFeedback = async (milestoneId: string, reportId: string) => {
     if (!feedback.trim()) {
       alert('Please enter feedback');
       return;
     }
 
-    // Update milestone with feedback
-    const updatedMilestones = milestones.map(m => {
-      if (m.id === milestoneId) {
-        const updatedReports = m.progressReports.map(r => {
-          if (r.id === reportId) {
-            const managerFeedback = r.managerFeedback || [];
-            managerFeedback.push({
-              managerId,
-              feedback: feedback.trim(),
-              feedbackDate: new Date().toISOString()
-            });
-            return { ...r, managerFeedback };
-          }
-          return r;
-        });
-        return { ...m, progressReports: updatedReports };
-      }
-      return m;
-    });
-
-    // Save updated milestones
-    const milestoneKey = `gbw_milestones_${participantId}`;
-    const allMilestones = localStorage.getItem(milestoneKey);
-    if (allMilestones) {
-      const parsedMilestones = JSON.parse(allMilestones);
-      const otherMilestones = parsedMilestones.filter((m: Milestone) => m.programId !== programId);
-      const combinedMilestones = [...otherMilestones, ...updatedMilestones];
-      localStorage.setItem(milestoneKey, JSON.stringify(combinedMilestones));
-    }
+    await addManagerFeedback(reportId, managerId, feedback.trim());
 
     // Notify participant
     const milestone = milestones.find(m => m.id === milestoneId);
     if (participant && milestone) {
-      NotificationManager.notifyFeedback(
+      await notifyFeedback({
         participantId,
-        'Manager',
-        milestone.title,
-        feedback.trim(),
-        milestoneId,
+        managerName: 'Manager',
+        milestoneTitle: milestone.title,
+        feedback: feedback.trim(),
+        assignmentId: milestoneId,
         reportId
-      );
+      });
     }
 
-    // Log the action
-    PermissionManager.logAuditAction(
-      managerId,
-      'PROVIDE_FEEDBACK',
-      participantId,
-      {
+    await logAuditEvent({
+      action: 'PROVIDE_FEEDBACK',
+      targetUserId: participantId,
+      programId,
+      metadata: {
         milestoneId,
         reportId,
         feedback: feedback.trim()
       }
-    );
+    });
 
-    setMilestones(updatedMilestones);
+    await loadParticipantDetails();
     setFeedback('');
     setSelectedReportId(null);
     alert('Feedback provided successfully');
@@ -225,6 +203,12 @@ const ParticipantDetailsModal: React.FC<ParticipantDetailsModalProps> = ({
 
         {/* Tab Content */}
         <div className="flex-1 overflow-y-auto p-6">
+          {error && (
+            <div className="mb-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md text-sm">
+              {error}
+            </div>
+          )}
+
           {activeTab === 'overview' && (
             <div className="space-y-6">
               {/* Statistics Grid */}

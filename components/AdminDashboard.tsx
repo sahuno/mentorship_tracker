@@ -6,6 +6,7 @@ import { getSystemStats } from '../src/lib/programs';
 interface AdminDashboardProps {
   user: User;
   onLogout: () => void;
+  onAccountSettings: () => void;
 }
 
 interface SystemStats {
@@ -18,7 +19,7 @@ interface SystemStats {
   activePrograms: number;
 }
 
-const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
+const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout, onAccountSettings }) => {
   const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'programs'>('overview');
   const [stats, setStats] = useState<SystemStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -55,6 +56,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
               <span className="text-sm text-gray-600">
                 Welcome, {user.name}
               </span>
+              <button
+                onClick={onAccountSettings}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+              >
+                Account settings
+              </button>
               <button
                 onClick={onLogout}
                 className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"

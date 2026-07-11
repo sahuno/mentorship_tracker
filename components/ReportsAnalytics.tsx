@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { User, Program, Milestone, MilestoneStatus, BalanceSheetCycle, UserRole } from '../types';
 import ProgramManager from '../utils/programManager';
-import PermissionManager from '../utils/permissions';
 import ExportManager from '../utils/exportManager';
+import { logAuditEvent } from '../src/lib/audit';
 
 interface ReportsAnalyticsProps {
   programId: string;
@@ -196,16 +196,17 @@ const ReportsAnalytics: React.FC<ReportsAnalyticsProps> = ({ programId, managerI
     setIsGenerating(false);
 
     // Log report generation
-    PermissionManager.logAuditAction(
-      managerId,
-      'GENERATE_REPORT',
+    logAuditEvent({
+      action: 'GENERATE_REPORT',
       programId,
-      {
+      metadata: {
         reportType: 'comprehensive',
         dateRange,
         timestamp: new Date().toISOString()
       }
-    );
+    }).catch((error) => {
+      console.error('Failed to log report generation:', error);
+    });
   };
 
   const handleExportReport = (format: 'csv' | 'json' | 'print') => {
@@ -220,15 +221,16 @@ const ReportsAnalytics: React.FC<ReportsAnalyticsProps> = ({ programId, managerI
     }
 
     // Log export action
-    PermissionManager.logAuditAction(
-      managerId,
-      'EXPORT_REPORT',
+    logAuditEvent({
+      action: 'EXPORT_REPORT',
       programId,
-      {
+      metadata: {
         format,
         timestamp: new Date().toISOString()
       }
-    );
+    }).catch((error) => {
+      console.error('Failed to log report export:', error);
+    });
   };
 
   const formatCurrency = (amount: number) => `$${amount.toFixed(2)}`;

@@ -41,15 +41,18 @@ const ManageProgramParticipantsModal: React.FC<ManageProgramParticipantsModalPro
     try {
       setLoadingParticipants(true);
       const data = await getProgram(program.id);
+      if (!data) throw new Error('Program not found');
 
       // Extract participants from program_participants relation
-      const enrolledParticipants = data?.program_participants?.map((pp: any) => ({
-        id: pp.profiles.id,
-        name: pp.profiles.name,
-        email: pp.profiles.email,
-        role: pp.profiles.role,
-        enrolled_at: pp.enrolled_at
-      })) || [];
+      const enrolledParticipants = data?.program_participants
+        ?.filter((pp: any) => pp.profiles?.role === 'participant')
+        .map((pp: any) => ({
+          id: pp.profiles.id,
+          name: pp.profiles.name,
+          email: pp.profiles.email,
+          role: pp.profiles.role,
+          enrolled_at: pp.enrolled_at
+        })) || [];
 
       setParticipants(enrolledParticipants);
     } catch (error) {
@@ -96,7 +99,7 @@ const ManageProgramParticipantsModal: React.FC<ManageProgramParticipantsModalPro
         onUpdate();
       } else if (result.needsInvite) {
         // New user - invite created
-        const inviteUrl = `${window.location.origin}/signup?invite=${result.inviteCode}`;
+        const inviteUrl = `${window.location.origin}?invite=${result.inviteCode}`;
         setInviteLink(inviteUrl);
         setMessage({
           type: 'info',

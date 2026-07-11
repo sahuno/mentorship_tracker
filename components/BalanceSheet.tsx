@@ -3,6 +3,7 @@ import { BalanceSheetCycle, Expense } from '../types';
 import PlusIcon from './icons/PlusIcon';
 import EditIcon from './icons/EditIcon';
 import DeleteIcon from './icons/DeleteIcon';
+import { openProtectedReceipt } from '../src/lib/receiptOcr';
 
 interface BalanceSheetProps {
   cycle: BalanceSheetCycle;
@@ -18,6 +19,14 @@ const BalanceSheet: React.FC<BalanceSheetProps> = ({ cycle, onAddExpense, onNewC
   const isOverBudget = remainingBudget < 0;
 
   const formatDate = (dateString: string) => new Date(dateString).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+
+  const handleViewReceipt = async (receiptUrl: string) => {
+    try {
+      await openProtectedReceipt(receiptUrl);
+    } catch (error) {
+      console.error('Failed to open receipt:', error);
+    }
+  };
 
   return (
     <div className="bg-white rounded-lg shadow-lg overflow-hidden">
@@ -86,7 +95,15 @@ const BalanceSheet: React.FC<BalanceSheetProps> = ({ cycle, onAddExpense, onNewC
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{expense.contact || '-'}</td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 max-w-xs truncate">{expense.remarks || '-'}</td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
-                  {expense.receiptUrl ? <a href={expense.receiptUrl} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:text-indigo-900">View</a> : 'N/A'}
+                  {expense.receiptUrl ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleViewReceipt(expense.receiptUrl)}
+                      className="text-indigo-600 hover:text-indigo-900"
+                    >
+                      View
+                    </button>
+                  ) : 'N/A'}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-right">
                    <button onClick={() => onEditExpense(expense)} className="text-indigo-600 hover:text-indigo-900 p-1" aria-label={`Edit expense ${expense.item}`}>

@@ -1,6 +1,5 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { User, Program, UserRole, Milestone } from '../types';
-import useLocalStorage from '../hooks/useLocalStorage';
 import Header from './Header';
 import TabNavigation from './TabNavigation';
 import CreateProgramModal from './CreateProgramModal';
@@ -9,18 +8,19 @@ import ParticipantDetailsModal from './ParticipantDetailsModal';
 import ProgressMatrixView from './ProgressMatrixView';
 import FinancialOversightTab from './FinancialOversightTab';
 import ManageProgramParticipantsModal from './ManageProgramParticipantsModal';
-import ProgramManager from '../utils/programManager';
-import UserManager from '../utils/userManager';
-import PermissionManager from '../utils/permissions';
-import NotificationManager from '../utils/notificationManager';
-import { v4 as uuidv4 } from 'uuid';
+import { createProgram, getMyPrograms, getProgram } from '../src/lib/programs';
+import { createMilestoneAssignments, getProgramMilestoneAssignments } from '../src/lib/milestones';
+import { dbProfileToUser, dbProgramToProgram } from '../src/lib/mappers';
+import { logAuditEvent } from '../src/lib/audit';
+import { notifyAssignment } from '../src/lib/notifications';
 
 interface ProgramManagerDashboardProps {
   user: User;
   onLogout: () => void;
+  onAccountSettings: () => void;
 }
 
-const ProgramManagerDashboard: React.FC<ProgramManagerDashboardProps> = ({ user, onLogout }) => {
+const ProgramManagerDashboard: React.FC<ProgramManagerDashboardProps> = ({ user, onLogout, onAccountSettings }) => {
   const [activeTab, setActiveTab] = useState<string>('overview');
   const [selectedProgramId, setSelectedProgramId] = useState<string | null>(null);
   const [showCreateProgramModal, setShowCreateProgramModal] = useState(false);
@@ -28,89 +28,123 @@ const ProgramManagerDashboard: React.FC<ProgramManagerDashboardProps> = ({ user,
   const [selectedParticipantId, setSelectedParticipantId] = useState<string | null>(null);
   const [showProgressMatrix, setShowProgressMatrix] = useState(false);
   const [programs, setPrograms] = useState<Program[]>([]);
+  const [participants, setParticipants] = useState<User[]>([]);
+  const [programMilestones, setProgramMilestones] = useState<Milestone[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [showManageParticipantsModal, setShowManageParticipantsModal] = useState(false);
   const [programToManage, setProgramToManage] = useState<Program | null>(null);
 
-  // Get programs managed by this user
-  const managedPrograms = useMemo(() => {
-    return ProgramManager.getProgramsForUser(user.id);
-  }, [user.id, programs]); // Re-fetch when programs change
+  const managedPrograms = programs;
 
-  const handleCreateProgram = (newProgram: Program) => {
-    setPrograms([...programs, newProgram]);
-    setSelectedProgramId(newProgram.id);
-    setShowCreateProgramModal(false);
-    // Refresh the page to update program list
-    window.location.reload();
+  const loadPrograms = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const data = await getMyPrograms();
+      const mappedPrograms = (data || []).map((program: any) => dbProgramToProgram(program));
+      setPrograms(mappedPrograms);
+      if (mappedPrograms.length > 0 && !selectedProgramId) {
+        setSelectedProgramId(mappedPrograms[0].id);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load programs');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleAssignMilestone = (assignments: any[]) => {
-    // Process each assignment
-    assignments.forEach(({ participantId, milestone }) => {
-      const milestoneKey = `gbw_milestones_${participantId}`;
-      const existingMilestones = localStorage.getItem(milestoneKey);
-      const milestones = existingMilestones ? JSON.parse(existingMilestones) : [];
+  const loadSelectedProgramData = async (programId: string) => {
+    try {
+      setError(null);
+      const [programData, milestoneData] = await Promise.all([
+        getProgram(programId),
+        getProgramMilestoneAssignments(programId)
+      ]);
+      if (!programData) throw new Error('Program not found');
 
-      // Create the milestone with unique ID
-      const newMilestone: Milestone = {
-        ...milestone,
-        id: uuidv4(),
-        userId: participantId,
-        createdAt: new Date().toISOString(),
-        progressReports: []
-      };
+      const programParticipants = (programData?.program_participants || [])
+        .filter((participant: any) =>
+          participant.status !== 'inactive'
+          && participant.profiles
+          && participant.profiles.role === 'participant'
+        )
+        .map((participant: any) => dbProfileToUser({
+          ...participant.profiles,
+          email: participant.profiles.email || ''
+        }));
 
-      milestones.push(newMilestone);
-      localStorage.setItem(milestoneKey, JSON.stringify(milestones));
+      setParticipants(programParticipants);
+      setProgramMilestones(milestoneData);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load program details');
+    }
+  };
 
-      // Create notification for participant
-      const participant = UserManager.getUserById(participantId);
-      if (participant && selectedProgram) {
-        NotificationManager.notifyAssignment(
-          participantId,
-          user.name,
-          milestone.title,
-          selectedProgram.name,
-          newMilestone.id,
-          selectedProgram.id,
-          milestone.assignmentInfo?.isRequired || false,
-          milestone.assignmentInfo?.canDecline || false
-        );
-      }
+  useEffect(() => {
+    loadPrograms();
+  }, []);
 
-      // Log the assignment
-      PermissionManager.logAuditAction(
-        user.id,
-        'ASSIGN_MILESTONE',
-        participantId,
-        {
-          milestoneId: newMilestone.id,
+  useEffect(() => {
+    if (selectedProgramId) {
+      loadSelectedProgramData(selectedProgramId);
+    }
+  }, [selectedProgramId]);
+
+  const handleCreateProgram = async (programData: {
+    name: string;
+    description: string;
+    start_date: string;
+    end_date: string;
+    total_budget: number;
+  }) => {
+    const newProgram = await createProgram(programData);
+    const mappedProgram = dbProgramToProgram(newProgram as any);
+    setPrograms((currentPrograms) => [...currentPrograms, mappedProgram]);
+    setSelectedProgramId(mappedProgram.id);
+    setShowCreateProgramModal(false);
+  };
+
+  const handleAssignMilestone = async (assignments: any[]) => {
+    if (!selectedProgramId) return;
+
+    const createdAssignments = await createMilestoneAssignments(selectedProgramId, assignments);
+    const programName = selectedProgram?.name || 'selected program';
+
+    await Promise.all(createdAssignments.map(async (milestone) => {
+      await notifyAssignment({
+        participantId: milestone.userId,
+        managerName: user.name,
+        milestoneTitle: milestone.title,
+        programName,
+        assignmentId: milestone.id,
+        programId: selectedProgramId,
+        isRequired: milestone.assignmentInfo?.isRequired ?? true,
+        canDecline: milestone.assignmentInfo?.canDecline ?? false
+      });
+
+      await logAuditEvent({
+        action: 'ASSIGN_MILESTONE',
+        targetUserId: milestone.userId,
+        programId: selectedProgramId,
+        metadata: {
+          assignmentId: milestone.id,
           milestoneTitle: milestone.title,
-          programId: selectedProgramId
+          isRequired: milestone.assignmentInfo?.isRequired ?? true,
+          canDecline: milestone.assignmentInfo?.canDecline ?? false
         }
-      );
-    });
+      });
+    }));
+
+    await loadSelectedProgramData(selectedProgramId);
 
     setShowAssignModal(false);
-    // Optionally show success message
     alert(`Successfully assigned milestone to ${assignments.length} participant(s)`);
   };
 
-  // Set initial selected program
-  React.useEffect(() => {
-    if (managedPrograms.length > 0 && !selectedProgramId) {
-      setSelectedProgramId(managedPrograms[0].id);
-    }
-  }, [managedPrograms, selectedProgramId]);
-
   const selectedProgram = selectedProgramId
-    ? ProgramManager.getProgramById(selectedProgramId)
+    ? managedPrograms.find((program) => program.id === selectedProgramId) || null
     : null;
-
-  // Get participants in selected program
-  const participants = selectedProgram
-    ? ProgramManager.getParticipantsInProgram(selectedProgram.id)
-    : [];
 
   // Tab configuration for Program Manager
   const tabs = [
@@ -174,18 +208,10 @@ const ProgramManagerDashboard: React.FC<ProgramManagerDashboardProps> = ({ user,
   const overviewStats = useMemo(() => {
     if (!selectedProgram) return null;
 
-    const stats = ProgramManager.getProgramStatistics(selectedProgram.id);
-
-    // Get milestone completion rates
     const participantMilestones = participants.map(p => {
-      const milestoneKey = `gbw_milestones_${p.id}`;
-      const milestonesData = localStorage.getItem(milestoneKey);
-      const milestones = milestonesData ? JSON.parse(milestonesData) : [];
-
-      const total = milestones.filter((m: any) => m.programId === selectedProgram.id).length;
-      const completed = milestones.filter((m: any) =>
-        m.programId === selectedProgram.id && m.status === 'completed'
-      ).length;
+      const milestones = programMilestones.filter((m) => m.userId === p.id);
+      const total = milestones.length;
+      const completed = milestones.filter((m) => m.status === 'completed').length;
 
       return { total, completed };
     });
@@ -197,15 +223,12 @@ const ProgramManagerDashboard: React.FC<ProgramManagerDashboardProps> = ({ user,
       : 0;
 
     return {
-      ...stats,
+      totalParticipants: participants.length,
       totalMilestones,
       completedMilestones,
       milestoneCompletionRate,
       activeParticipants: participants.filter(p => {
-        // Check if participant has recent activity
-        const milestoneKey = `gbw_milestones_${p.id}`;
-        const milestonesData = localStorage.getItem(milestoneKey);
-        const milestones = milestonesData ? JSON.parse(milestonesData) : [];
+        const milestones = programMilestones.filter((m) => m.userId === p.id);
 
         const recentActivity = milestones.some((m: any) => {
           if (!m.progressReports || m.progressReports.length === 0) return false;
@@ -217,13 +240,27 @@ const ProgramManagerDashboard: React.FC<ProgramManagerDashboardProps> = ({ user,
         });
 
         return recentActivity;
-      }).length
+      }).length,
+      daysRemaining: Math.ceil(
+        (new Date(selectedProgram.endDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
+      )
     };
-  }, [selectedProgram, participants]);
+  }, [selectedProgram, participants, programMilestones]);
+
+  if (loading) {
+    return (
+      <>
+        <Header user={user} onLogout={onLogout} onAccountSettings={onAccountSettings} />
+        <main className="p-8 max-w-7xl mx-auto">
+          <p className="text-gray-600">Loading program manager data...</p>
+        </main>
+      </>
+    );
+  }
 
   return (
     <>
-      <Header user={user} onLogout={onLogout} />
+      <Header user={user} onLogout={onLogout} onAccountSettings={onAccountSettings} />
 
       {/* Program Selector */}
       <div className="bg-white border-b px-4 sm:px-6 md:px-8">
@@ -268,6 +305,12 @@ const ProgramManagerDashboard: React.FC<ProgramManagerDashboardProps> = ({ user,
 
       {/* Tab Content */}
       <main className="p-4 sm:p-6 md:p-8 max-w-7xl mx-auto">
+        {error && (
+          <div className="mb-6 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md text-sm">
+            {error}
+          </div>
+        )}
+
         {activeTab === 'overview' && selectedProgram && overviewStats && (
           <div className="space-y-6">
             <h2 className="text-2xl font-bold text-gray-900">{selectedProgram.name} Overview</h2>
@@ -416,7 +459,7 @@ const ProgramManagerDashboard: React.FC<ProgramManagerDashboardProps> = ({ user,
           <div className="space-y-6">
             <div className="flex justify-between items-center">
               <h2 className="text-2xl font-bold text-gray-900">Managed Programs</h2>
-              {user.role === UserRole.ADMIN && (
+              {(user.role === UserRole.ADMIN || user.role === UserRole.PROGRAM_MANAGER) && (
                 <button
                   onClick={() => setShowCreateProgramModal(true)}
                   className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors"
@@ -432,7 +475,9 @@ const ProgramManagerDashboard: React.FC<ProgramManagerDashboardProps> = ({ user,
                     <p className="text-gray-500 text-center py-8">No programs assigned yet.</p>
                   ) : (
                     managedPrograms.map(program => {
-                      const stats = ProgramManager.getProgramStatistics(program.id);
+                      const stats = {
+                        totalParticipants: program.participantIds.length
+                      };
                       return (
                         <div key={program.id} className="border rounded-lg p-4 hover:bg-gray-50">
                           <div className="flex justify-between items-start mb-3">
@@ -500,7 +545,13 @@ const ProgramManagerDashboard: React.FC<ProgramManagerDashboardProps> = ({ user,
             {selectedProgram ? (
               showProgressMatrix ? (
                 <div className="bg-white shadow rounded-lg p-6">
-                  <ProgressMatrixView programId={selectedProgram.id} managerId={user.id} />
+                  <ProgressMatrixView
+                    programId={selectedProgram.id}
+                    managerId={user.id}
+                    program={selectedProgram}
+                    participants={participants}
+                    milestones={programMilestones}
+                  />
                 </div>
               ) : (
                 <div className="bg-white shadow rounded-lg">
@@ -531,11 +582,9 @@ const ProgramManagerDashboard: React.FC<ProgramManagerDashboardProps> = ({ user,
                         </thead>
                         <tbody className="bg-white divide-y divide-gray-200">
                           {participants.map(participant => {
-                            // Get participant's milestones
-                            const milestoneKey = `gbw_milestones_${participant.id}`;
-                            const milestonesData = localStorage.getItem(milestoneKey);
-                            const milestones = milestonesData ? JSON.parse(milestonesData) : [];
-                            const programMilestones = milestones.filter((m: any) => m.programId === selectedProgram.id);
+                            const participantMilestones = programMilestones.filter(
+                              (milestone) => milestone.userId === participant.id
+                            );
 
                             return (
                               <tr key={participant.id}>
@@ -546,7 +595,7 @@ const ProgramManagerDashboard: React.FC<ProgramManagerDashboardProps> = ({ user,
                                   <div className="text-sm text-gray-500">{participant.email}</div>
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap">
-                                  <div className="text-sm text-gray-900">{programMilestones.length} milestones</div>
+                                  <div className="text-sm text-gray-900">{participantMilestones.length} milestones</div>
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap">
                                   <div className="text-sm text-gray-500">Recently active</div>
@@ -658,6 +707,12 @@ const ProgramManagerDashboard: React.FC<ProgramManagerDashboardProps> = ({ user,
           programId={selectedProgramId}
           onClose={() => setShowAssignModal(false)}
           onAssign={handleAssignMilestone}
+          participants={participants}
+          program={selectedProgram}
+          milestoneCounts={programMilestones.reduce<Record<string, number>>((counts, milestone) => {
+            counts[milestone.userId] = (counts[milestone.userId] || 0) + 1;
+            return counts;
+          }, {})}
         />
       )}
 
@@ -679,8 +734,10 @@ const ProgramManagerDashboard: React.FC<ProgramManagerDashboardProps> = ({ user,
             setProgramToManage(null);
           }}
           onUpdate={() => {
-            // Refresh the programs list
-            setPrograms([...programs]);
+            loadPrograms();
+            if (selectedProgramId) {
+              loadSelectedProgramData(selectedProgramId);
+            }
           }}
         />
       )}

@@ -9,15 +9,35 @@ interface MilestoneTabProps {
   user: User;
   milestones: Milestone[];
   onMilestonesUpdate: (milestones: Milestone[]) => void;
+  onSaveMilestone?: (
+    milestone: Omit<Milestone, 'id' | 'userId' | 'createdAt' | 'progressReports'>,
+    editingMilestone?: Milestone | null
+  ) => Promise<void>;
+  onSaveProgressReport?: (
+    milestoneId: string,
+    report: Omit<ProgressReport, 'id'>
+  ) => Promise<void>;
+  onUpdateStatus?: (milestoneId: string, status: MilestoneStatus) => Promise<void>;
+  onDeleteMilestone?: (milestoneId: string) => Promise<void>;
 }
 
-const MilestoneTab: React.FC<MilestoneTabProps> = ({ user, milestones, onMilestonesUpdate }) => {
+const MilestoneTab: React.FC<MilestoneTabProps> = ({
+  user,
+  milestones,
+  onMilestonesUpdate,
+  onSaveMilestone,
+  onSaveProgressReport,
+  onUpdateStatus,
+  onDeleteMilestone
+}) => {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [editingMilestone, setEditingMilestone] = useState<Milestone | null>(null);
   const [reportingMilestone, setReportingMilestone] = useState<Milestone | null>(null);
   const [filterStatus, setFilterStatus] = useState<'all' | MilestoneStatus>('all');
   const [filterCategory, setFilterCategory] = useState<'all' | MilestoneCategory>('all');
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Calculate statistics
   const stats = useMemo(() => {
@@ -62,34 +82,57 @@ const MilestoneTab: React.FC<MilestoneTabProps> = ({ user, milestones, onMilesto
     setIsAddModalOpen(true);
   };
 
-  const handleDeleteMilestone = (milestoneId: string) => {
-    if (window.confirm('Are you sure you want to delete this milestone? All progress reports will be lost.')) {
-      const updatedMilestones = milestones.filter(m => m.id !== milestoneId);
-      onMilestonesUpdate(updatedMilestones);
+  const handleDeleteMilestone = async (milestoneId: string) => {
+    if (!window.confirm('Are you sure you want to delete this milestone? All progress reports will be lost.')) {
+      return;
+    }
+
+    try {
+      setIsSaving(true);
+      setError(null);
+      if (onDeleteMilestone) {
+        await onDeleteMilestone(milestoneId);
+      } else {
+        const updatedMilestones = milestones.filter(m => m.id !== milestoneId);
+        onMilestonesUpdate(updatedMilestones);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete milestone');
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const handleSaveMilestone = (milestoneData: Omit<Milestone, 'id' | 'userId' | 'createdAt' | 'progressReports'>) => {
-    if (editingMilestone) {
-      // Update existing milestone
-      const updatedMilestones = milestones.map(m =>
-        m.id === editingMilestone.id
-          ? { ...m, ...milestoneData }
-          : m
-      );
-      onMilestonesUpdate(updatedMilestones);
-    } else {
-      // Create new milestone
-      const newMilestone: Milestone = {
-        ...milestoneData,
-        id: uuidv4(),
-        userId: user.id,
-        createdAt: new Date().toISOString(),
-        progressReports: []
-      };
-      onMilestonesUpdate([...milestones, newMilestone]);
+  const handleSaveMilestone = async (milestoneData: Omit<Milestone, 'id' | 'userId' | 'createdAt' | 'progressReports'>) => {
+    try {
+      setIsSaving(true);
+      setError(null);
+
+      if (onSaveMilestone) {
+        await onSaveMilestone(milestoneData, editingMilestone);
+      } else if (editingMilestone) {
+        const updatedMilestones = milestones.map(m =>
+          m.id === editingMilestone.id
+            ? { ...m, ...milestoneData }
+            : m
+        );
+        onMilestonesUpdate(updatedMilestones);
+      } else {
+        const newMilestone: Milestone = {
+          ...milestoneData,
+          id: uuidv4(),
+          userId: user.id,
+          createdAt: new Date().toISOString(),
+          progressReports: []
+        };
+        onMilestonesUpdate([...milestones, newMilestone]);
+      }
+      setIsAddModalOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save milestone');
+    } finally {
+      setIsSaving(false);
     }
-    setIsAddModalOpen(false);
   };
 
   const handleAddReport = (milestone: Milestone) => {
@@ -97,31 +140,56 @@ const MilestoneTab: React.FC<MilestoneTabProps> = ({ user, milestones, onMilesto
     setIsReportModalOpen(true);
   };
 
-  const handleSaveReport = (report: Omit<ProgressReport, 'id'>) => {
+  const handleSaveReport = async (report: Omit<ProgressReport, 'id'>) => {
     if (!reportingMilestone) return;
 
-    const newReport: ProgressReport = {
-      ...report,
-      id: uuidv4()
-    };
+    try {
+      setIsSaving(true);
+      setError(null);
 
-    const updatedMilestones = milestones.map(m =>
-      m.id === reportingMilestone.id
-        ? { ...m, progressReports: [...m.progressReports, newReport] }
-        : m
-    );
+      if (onSaveProgressReport) {
+        await onSaveProgressReport(reportingMilestone.id, report);
+      } else {
+        const newReport: ProgressReport = {
+          ...report,
+          id: uuidv4()
+        };
 
-    onMilestonesUpdate(updatedMilestones);
-    setIsReportModalOpen(false);
+        const updatedMilestones = milestones.map(m =>
+          m.id === reportingMilestone.id
+            ? { ...m, progressReports: [...m.progressReports, newReport] }
+            : m
+        );
+
+        onMilestonesUpdate(updatedMilestones);
+      }
+      setIsReportModalOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save progress report');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const handleUpdateStatus = (milestoneId: string, newStatus: MilestoneStatus) => {
-    const updatedMilestones = milestones.map(m =>
-      m.id === milestoneId
-        ? { ...m, status: newStatus }
-        : m
-    );
-    onMilestonesUpdate(updatedMilestones);
+  const handleUpdateStatus = async (milestoneId: string, newStatus: MilestoneStatus) => {
+    try {
+      setIsSaving(true);
+      setError(null);
+      if (onUpdateStatus) {
+        await onUpdateStatus(milestoneId, newStatus);
+      } else {
+        const updatedMilestones = milestones.map(m =>
+          m.id === milestoneId
+            ? { ...m, status: newStatus }
+            : m
+        );
+        onMilestonesUpdate(updatedMilestones);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update milestone status');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const getCategoryColor = (category: MilestoneCategory) => {
@@ -136,6 +204,16 @@ const MilestoneTab: React.FC<MilestoneTabProps> = ({ user, milestones, onMilesto
 
   return (
     <div className="space-y-6">
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md text-sm">
+          {error}
+        </div>
+      )}
+      {isSaving && (
+        <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-md text-sm">
+          Saving milestone changes...
+        </div>
+      )}
       {/* Stats Overview */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="bg-white rounded-lg shadow p-6">

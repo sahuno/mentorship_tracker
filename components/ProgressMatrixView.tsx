@@ -1,10 +1,12 @@
 import React, { useState, useMemo } from 'react';
 import { User, Milestone, MilestoneStatus, Program } from '../types';
-import ProgramManager from '../utils/programManager';
 
 interface ProgressMatrixViewProps {
   programId: string;
   managerId: string;
+  program?: Program | null;
+  participants?: User[];
+  milestones?: Milestone[];
 }
 
 interface ParticipantProgress {
@@ -21,21 +23,25 @@ interface ParticipantProgress {
   };
 }
 
-const ProgressMatrixView: React.FC<ProgressMatrixViewProps> = ({ programId, managerId }) => {
+const ProgressMatrixView: React.FC<ProgressMatrixViewProps> = ({
+  programId,
+  managerId,
+  program: providedProgram,
+  participants: providedParticipants,
+  milestones: providedMilestones
+}) => {
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [sortBy, setSortBy] = useState<'name' | 'completion' | 'activity'>('name');
   const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive'>('all');
 
   // Get program and participants
-  const program = ProgramManager.getProgramById(programId);
-  const participants = program ? ProgramManager.getParticipantsInProgram(programId) : [];
+  const program = providedProgram ?? null;
+  const participants = providedParticipants ?? [];
 
   // Build progress data for each participant
   const participantProgress: ParticipantProgress[] = useMemo(() => {
     return participants.map(participant => {
-      const milestoneKey = `gbw_milestones_${participant.id}`;
-      const milestonesData = localStorage.getItem(milestoneKey);
-      const allMilestones = milestonesData ? JSON.parse(milestonesData) : [];
+      const allMilestones = providedMilestones ?? [];
       const programMilestones = allMilestones.filter((m: Milestone) => m.programId === programId);
 
       // Calculate statistics

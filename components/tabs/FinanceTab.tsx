@@ -10,12 +10,24 @@ interface FinanceTabProps {
   cycles: BalanceSheetCycle[];
   activeCycle: BalanceSheetCycle | undefined;
   onCyclesUpdate: (cycles: BalanceSheetCycle[]) => void;
+  onStartNewCycle?: (budget: number, startDate: string, endDate: string) => Promise<void>;
+  onSaveExpense?: (expense: Expense | Omit<Expense, 'id'>) => Promise<void>;
+  onDeleteExpense?: (expenseId: string) => Promise<void>;
 }
 
-const FinanceTab: React.FC<FinanceTabProps> = ({ user, cycles, activeCycle, onCyclesUpdate }) => {
+const FinanceTab: React.FC<FinanceTabProps> = ({
+  user,
+  cycles,
+  activeCycle,
+  onCyclesUpdate,
+  onStartNewCycle,
+  onSaveExpense,
+  onDeleteExpense
+}) => {
   const [isAddExpenseModalOpen, setAddExpenseModalOpen] = useState(false);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [isNewCycleModalOpen, setNewCycleModalOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   // Calculate statistics
   const stats = useMemo(() => {
@@ -96,7 +108,21 @@ const FinanceTab: React.FC<FinanceTabProps> = ({ user, cycles, activeCycle, onCy
   };
 
   // Data handlers
-  const handleStartNewCycle = (budget: number, startDate: string, endDate: string) => {
+  const handleStartNewCycle = async (budget: number, startDate: string, endDate: string) => {
+    if (onStartNewCycle) {
+      setIsSaving(true);
+      try {
+        await onStartNewCycle(budget, startDate, endDate);
+        setNewCycleModalOpen(false);
+      } catch (error) {
+        console.error('Failed to start new cycle:', error);
+        alert(error instanceof Error ? error.message : 'Failed to start new cycle');
+      } finally {
+        setIsSaving(false);
+      }
+      return;
+    }
+
     const newCycles = cycles.map(c => ({ ...c, isActive: false }));
     const newCycle: BalanceSheetCycle = {
       id: uuidv4(),
@@ -110,8 +136,22 @@ const FinanceTab: React.FC<FinanceTabProps> = ({ user, cycles, activeCycle, onCy
     setNewCycleModalOpen(false);
   };
 
-  const handleSaveExpense = (expenseData: Expense | Omit<Expense, 'id'>) => {
+  const handleSaveExpense = async (expenseData: Expense | Omit<Expense, 'id'>) => {
     if (!activeCycle) return;
+
+    if (onSaveExpense) {
+      setIsSaving(true);
+      try {
+        await onSaveExpense(expenseData);
+        handleCloseExpenseModal();
+      } catch (error) {
+        console.error('Failed to save expense:', error);
+        alert(error instanceof Error ? error.message : 'Failed to save expense');
+      } finally {
+        setIsSaving(false);
+      }
+      return;
+    }
 
     let updatedCycles;
     if ('id' in expenseData) { // Editing existing expense
@@ -132,8 +172,21 @@ const FinanceTab: React.FC<FinanceTabProps> = ({ user, cycles, activeCycle, onCy
     handleCloseExpenseModal();
   };
 
-  const handleDeleteExpense = (expenseId: string) => {
+  const handleDeleteExpense = async (expenseId: string) => {
     if (!activeCycle || !window.confirm('Are you sure you want to delete this expense?')) return;
+
+    if (onDeleteExpense) {
+      setIsSaving(true);
+      try {
+        await onDeleteExpense(expenseId);
+      } catch (error) {
+        console.error('Failed to delete expense:', error);
+        alert(error instanceof Error ? error.message : 'Failed to delete expense');
+      } finally {
+        setIsSaving(false);
+      }
+      return;
+    }
 
     const updatedCycles = cycles.map(c =>
       c.id === activeCycle.id
@@ -145,6 +198,12 @@ const FinanceTab: React.FC<FinanceTabProps> = ({ user, cycles, activeCycle, onCy
 
   return (
     <div className="space-y-6">
+      {isSaving && (
+        <div className="bg-blue-50 border border-blue-200 text-blue-800 rounded-md px-4 py-3 text-sm">
+          Saving finance changes...
+        </div>
+      )}
+
       {activeCycle ? (
         <>
           {/* Quick Stats Grid */}
@@ -328,6 +387,7 @@ const FinanceTab: React.FC<FinanceTabProps> = ({ user, cycles, activeCycle, onCy
           onClose={handleCloseExpenseModal}
           onSave={handleSaveExpense}
           expenseToEdit={editingExpense}
+          cycleId={activeCycle?.id}
         />
       )}
 

@@ -10,13 +10,32 @@ import MilestoneTab from './tabs/MilestoneTab';
 import AssignmentsTab from './tabs/AssignmentsTab';
 import ProgramSelector from './ProgramSelector';
 import { getMyPrograms } from '../src/lib/programs';
+import { createBalanceCycle, getMyBalanceCycles } from '../src/lib/cycles';
+import {
+  createExpense,
+  deleteExpense,
+  getExpenses,
+  updateExpense
+} from '../src/lib/expenses';
+import {
+  createProgressReport,
+  createSelfMilestone,
+  deleteMilestoneAssignment,
+  getMyMilestoneAssignments,
+  respondToAssignment,
+  updateAssignmentStatus,
+  updateMilestoneAssignment
+} from '../src/lib/milestones';
+import { dbCycleToBalanceSheetCycle, dbExpenseToExpense } from '../src/lib/mappers';
+import { logAuditEvent } from '../src/lib/audit';
 
 interface DashboardProps {
   user: User;
   onLogout: () => void;
+  onAccountSettings: () => void;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
+const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onAccountSettings }) => {
   // Program state
   const [programs, setPrograms] = useState<any[]>([]);
   const [selectedProgram, setSelectedProgram] = useState<any>(null);
@@ -27,8 +46,10 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   const userCyclesKey = UserManager.getUserCyclesKey(user.id);
   const userMilestonesKey = `gbw_milestones_${user.id}`;
 
-  const [cycles, setCycles] = useLocalStorage<BalanceSheetCycle[]>(userCyclesKey, []);
-  const [milestones, setMilestones] = useLocalStorage<Milestone[]>(userMilestonesKey, []);
+  const [, setStoredCycles] = useLocalStorage<BalanceSheetCycle[]>(userCyclesKey, []);
+  const [cycles, setCycles] = useState<BalanceSheetCycle[]>([]);
+  const [, setStoredMilestones] = useLocalStorage<Milestone[]>(userMilestonesKey, []);
+  const [milestones, setMilestones] = useState<Milestone[]>([]);
   const [activeTab, setActiveTab] = useState<string>('home');
 
   // Load programs on mount
@@ -63,9 +84,31 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   };
 
   const loadProgramData = async () => {
-    // For now, keep using localStorage
-    // TODO: Load program-specific data from Supabase
-    console.log('Loading data for program:', selectedProgram.name);
+    if (!selectedProgram) return;
+
+    try {
+      setError(null);
+      const dbCycles = await getMyBalanceCycles(selectedProgram.id);
+      const cyclesWithExpenses = await Promise.all(
+        dbCycles.map(async (cycle: any) => {
+          const dbExpenses = await getExpenses(cycle.id);
+
+          return dbCycleToBalanceSheetCycle(
+            cycle,
+            dbExpenses.map((expense: any) => dbExpenseToExpense(expense))
+          );
+        })
+      );
+      const dbMilestones = await getMyMilestoneAssignments(selectedProgram.id);
+
+      setCycles(cyclesWithExpenses);
+      setStoredCycles(cyclesWithExpenses);
+      setMilestones(dbMilestones);
+      setStoredMilestones(dbMilestones);
+    } catch (err) {
+      console.error('Failed to load program finance data:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load program finance data');
+    }
   };
 
   const handleProgramSwitch = () => {
@@ -126,6 +169,125 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
 
   const handleCyclesUpdate = (updatedCycles: BalanceSheetCycle[]) => {
     setCycles(updatedCycles);
+    setStoredCycles(updatedCycles);
+  };
+
+  const handleStartNewCycle = async (budget: number, startDate: string, endDate: string) => {
+    if (!selectedProgram) return;
+
+    await createBalanceCycle({
+      program_id: selectedProgram.id,
+      start_date: startDate,
+      end_date: endDate,
+      budget
+    });
+
+    await loadProgramData();
+  };
+
+  const handleSaveExpense = async (expenseData: any) => {
+    if (!activeCycle) return;
+
+    if ('id' in expenseData) {
+      await updateExpense(expenseData.id, {
+        description: expenseData.item,
+        category: expenseData.category,
+        amount: expenseData.amount,
+        date: expenseData.date,
+        contact: expenseData.contact,
+        remarks: expenseData.remarks,
+        receipt_url: expenseData.receiptUrl
+      });
+    } else {
+      await createExpense({
+        cycle_id: activeCycle.id,
+        description: expenseData.item,
+        category: expenseData.category,
+        amount: expenseData.amount,
+        date: expenseData.date,
+        contact: expenseData.contact,
+        remarks: expenseData.remarks,
+        receipt_url: expenseData.receiptUrl
+      });
+    }
+
+    await loadProgramData();
+  };
+
+  const handleDeleteExpense = async (expenseId: string) => {
+    await deleteExpense(expenseId);
+    await loadProgramData();
+  };
+
+  const handleMilestonesUpdate = (updatedMilestones: Milestone[]) => {
+    setMilestones(updatedMilestones);
+    setStoredMilestones(updatedMilestones);
+  };
+
+  const handleSaveMilestone = async (
+    milestoneData: Omit<Milestone, 'id' | 'userId' | 'createdAt' | 'progressReports'>,
+    editingMilestone?: Milestone | null
+  ) => {
+    if (editingMilestone) {
+      await updateMilestoneAssignment(editingMilestone.id, milestoneData);
+      await logAuditEvent({
+        action: 'UPDATE_MILESTONE',
+        programId: selectedProgram?.id,
+        metadata: {
+          assignmentId: editingMilestone.id,
+          milestoneTitle: milestoneData.title
+        }
+      });
+      await loadProgramData();
+      return;
+    }
+
+    const created = await createSelfMilestone(selectedProgram?.id, milestoneData);
+    await logAuditEvent({
+      action: 'CREATE_SELF_MILESTONE',
+      programId: selectedProgram?.id,
+      metadata: {
+        assignmentId: created.id,
+        milestoneTitle: created.title
+      }
+    });
+    await loadProgramData();
+  };
+
+  const handleDeleteMilestone = async (milestoneId: string) => {
+    const milestone = milestones.find((entry) => entry.id === milestoneId);
+    await deleteMilestoneAssignment(milestoneId);
+    await logAuditEvent({
+      action: 'DELETE_MILESTONE',
+      programId: selectedProgram?.id,
+      metadata: {
+        assignmentId: milestoneId,
+        milestoneTitle: milestone?.title
+      }
+    });
+    await loadProgramData();
+  };
+
+  const handleUpdateMilestoneStatus = async (milestoneId: string, status: any) => {
+    await updateAssignmentStatus(milestoneId, status);
+    await loadProgramData();
+  };
+
+  const handleSaveProgressReport = async (
+    milestoneId: string,
+    report: any
+  ) => {
+    await createProgressReport(milestoneId, report);
+    await loadProgramData();
+  };
+
+  const handleAssignmentResponse = async (
+    milestoneId: string,
+    accepted: boolean,
+    comment: string
+  ) => {
+    await respondToAssignment(milestoneId, accepted, comment);
+    await loadProgramData();
   };
 
   // Show loading state
@@ -178,7 +340,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
 
   return (
     <>
-      <Header user={user} onLogout={onLogout} />
+      <Header user={user} onLogout={onLogout} onAccountSettings={onAccountSettings} />
 
       {/* Program Context Header */}
       {selectedProgram && (
@@ -243,6 +405,9 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
             cycles={cycles}
             activeCycle={activeCycle}
             onCyclesUpdate={handleCyclesUpdate}
+            onStartNewCycle={handleStartNewCycle}
+            onSaveExpense={handleSaveExpense}
+            onDeleteExpense={handleDeleteExpense}
           />
         )}
 
@@ -250,7 +415,11 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
           <MilestoneTab
             user={user}
             milestones={milestones}
-            onMilestonesUpdate={setMilestones}
+            onMilestonesUpdate={handleMilestonesUpdate}
+            onSaveMilestone={handleSaveMilestone}
+            onSaveProgressReport={handleSaveProgressReport}
+            onUpdateStatus={handleUpdateMilestoneStatus}
+            onDeleteMilestone={handleDeleteMilestone}
           />
         )}
 
@@ -258,7 +427,8 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
           <AssignmentsTab
             user={user}
             milestones={milestones}
-            onMilestonesUpdate={setMilestones}
+            onMilestonesUpdate={handleMilestonesUpdate}
+            onAssignmentResponse={handleAssignmentResponse}
           />
         )}
       </main>

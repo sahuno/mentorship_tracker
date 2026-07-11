@@ -1,13 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Program, User, UserRole } from '../types';
+import { User } from '../types';
 import CloseIcon from './icons/CloseIcon';
-import ProgramManager from '../utils/programManager';
-import UserManager from '../utils/userManager';
 
 interface CreateProgramModalProps {
   user: User;
   onClose: () => void;
-  onSave: (program: Program) => void;
+  onSave: (program: {
+    name: string;
+    description: string;
+    start_date: string;
+    end_date: string;
+    total_budget: number;
+  }) => void | Promise<void>;
 }
 
 const CreateProgramModal: React.FC<CreateProgramModalProps> = ({ user, onClose, onSave }) => {
@@ -15,14 +19,10 @@ const CreateProgramModal: React.FC<CreateProgramModalProps> = ({ user, onClose, 
   const [description, setDescription] = useState('');
   const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
   const [endDate, setEndDate] = useState('');
-  const [selectedManagers, setSelectedManagers] = useState<string[]>([user.id]);
   const [error, setError] = useState('');
 
   const modalRef = useRef<HTMLDivElement>(null);
   const firstFocusableElementRef = useRef<HTMLInputElement>(null);
-
-  // Get all program managers for selection
-  const availableManagers = UserManager.getUsersByRole(UserRole.PROGRAM_MANAGER);
 
   // Accessibility: Focus trapping and Escape key
   useEffect(() => {
@@ -40,7 +40,7 @@ const CreateProgramModal: React.FC<CreateProgramModalProps> = ({ user, onClose, 
     };
   }, [onClose]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
@@ -68,36 +68,12 @@ const CreateProgramModal: React.FC<CreateProgramModalProps> = ({ user, onClose, 
       return;
     }
 
-    if (selectedManagers.length === 0) {
-      setError('At least one manager must be assigned');
-      return;
-    }
-
-    // Create the program
-    const newProgram = ProgramManager.createProgram(
-      name.trim(),
-      description.trim(),
-      startDate,
-      endDate,
-      user.id,
-      selectedManagers
-    );
-
-    onSave(newProgram);
-  };
-
-  const toggleManager = (managerId: string) => {
-    setSelectedManagers(prev => {
-      if (prev.includes(managerId)) {
-        // Don't allow removing the last manager
-        if (prev.length === 1) {
-          setError('At least one manager is required');
-          return prev;
-        }
-        return prev.filter(id => id !== managerId);
-      } else {
-        return [...prev, managerId];
-      }
+    await onSave({
+      name: name.trim(),
+      description: description.trim(),
+      start_date: startDate,
+      end_date: endDate,
+      total_budget: 0
     });
   };
 
@@ -188,30 +164,6 @@ const CreateProgramModal: React.FC<CreateProgramModalProps> = ({ user, onClose, 
               </div>
             </div>
 
-            {/* Manager Selection */}
-            {availableManagers.length > 1 && (
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Assign Managers <span className="text-red-500">*</span>
-                </label>
-                <div className="space-y-2 max-h-40 overflow-y-auto border border-gray-200 rounded-md p-2">
-                  {availableManagers.map(manager => (
-                    <label key={manager.id} className="flex items-center">
-                      <input
-                        type="checkbox"
-                        checked={selectedManagers.includes(manager.id)}
-                        onChange={() => toggleManager(manager.id)}
-                        className="mr-2"
-                      />
-                      <span className="text-sm">
-                        {manager.name} {manager.id === user.id && '(You)'}
-                      </span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            )}
-
             {/* Error Message */}
             {error && (
               <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-md text-sm">
@@ -224,7 +176,7 @@ const CreateProgramModal: React.FC<CreateProgramModalProps> = ({ user, onClose, 
               <h4 className="text-sm font-medium text-blue-900 mb-2">Program Setup:</h4>
               <ul className="text-sm text-blue-700 space-y-1">
                 <li>• Programs help organize participants and milestones</li>
-                <li>• You can assign multiple managers to share oversight</li>
+                <li>• You will be assigned as the program manager</li>
                 <li>• Participants will be added after program creation</li>
                 <li>• Program status updates automatically based on dates</li>
               </ul>

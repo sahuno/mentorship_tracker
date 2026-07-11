@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { login, signUp } from '../src/lib/auth';
-import { getInviteDetails } from '../src/lib/programs';
+import { getSession, login, resetPassword, signUp } from '../src/lib/auth';
+import { acceptInvite, getInviteDetails } from '../src/lib/programs';
 import { UserRole } from '../types';
 
 interface LoginProps {
@@ -68,6 +68,31 @@ const LoginSupabase: React.FC<LoginProps> = ({ onLogin }) => {
     }
   };
 
+  const handleForgotPassword = async () => {
+    setError('');
+    setSuccess('');
+
+    if (!email.trim()) {
+      setError('Enter your email first so we can send the reset link.');
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      await resetPassword(email.trim());
+      setSuccess(`Password reset email sent to ${email.trim()}. Check your inbox and follow the link to set a new password.`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to send reset email';
+      setError(
+        message.includes('rate limit')
+          ? 'Password reset emails are rate-limited by Supabase unless custom SMTP is configured. Try again later or set up SendGrid/Resend.'
+          : message
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -87,24 +112,49 @@ const LoginSupabase: React.FC<LoginProps> = ({ onLogin }) => {
           throw new Error('Passwords do not match');
         }
 
-        // Create user with Supabase
-        // Note: Role is determined by the database trigger based on invitation
+        // Create user with Supabase.
+        // Note: Role is NOT sent from the client. The secure database trigger
+        // (handle_new_user) derives the role solely from an email-matched invite
+        // and ignores any client-supplied role. Sending it here would be inert.
         const { user } = await signUp({
           email,
           password,
           name,
-          role: UserRole.PARTICIPANT, // Default, will be overridden by invite if exists
           phone: phone || undefined,
         });
 
         if (user) {
+          let enrollmentAccepted = false;
+          let enrollmentPendingConfirmation = false;
+
+          if (inviteCode && inviteDetails?.program?.id) {
+            const session = await getSession();
+
+            if (session?.user?.id === user.id) {
+              enrollmentAccepted = await acceptInvite(inviteCode, user.id);
+            } else {
+              // Email-confirmation signups may not receive a session immediately.
+              // The database trigger should accept the invite during auth user creation,
+              // but the client cannot verify that until the user confirms and signs in.
+              enrollmentPendingConfirmation = true;
+            }
+
+            if (!enrollmentAccepted && !enrollmentPendingConfirmation) {
+              throw new Error(
+                'Account created, but we could not complete program enrollment. Please contact your program manager.'
+              );
+            }
+          }
+
           // Determine success message based on invite
           if (inviteDetails) {
             const roleName = formatRole(inviteDetails.target_role || 'participant');
             if (inviteDetails.program?.name) {
               setSuccess(
-                `Account created as ${roleName} and enrolled in "${inviteDetails.program.name}"! ` +
-                'Please check your email to confirm your account.'
+                enrollmentPendingConfirmation
+                  ? `Account created as ${roleName}. Please check your email to confirm your account; program enrollment will be finalized when your account is confirmed.`
+                  : `Account created as ${roleName} and enrolled in "${inviteDetails.program.name}"! ` +
+                    'Please check your email to confirm your account.'
               );
             } else {
               setSuccess(
@@ -124,11 +174,27 @@ const LoginSupabase: React.FC<LoginProps> = ({ onLogin }) => {
           throw new Error('Invalid email or password');
         }
 
-        // Call onLogin with combined user data
+        if (inviteCode && inviteDetails?.program?.id) {
+          const accepted = await acceptInvite(inviteCode, result.user.id);
+
+          if (!accepted) {
+            throw new Error(
+              'Signed in, but we could not complete program enrollment. Please contact your program manager.'
+            );
+          }
+        }
+
+        // Call onLogin with combined user data.
+        // IMPORTANT: For an existing user signing in, the routed role MUST come from
+        // their actual profile (the DB is the source of truth), never from the invite's
+        // target_role. Otherwise a manager/admin opening a participant invite link would
+        // be routed to the wrong dashboard. The invite is still accepted above for
+        // program enrollment, but it must not influence the session role.
         onLogin({
           id: result.user.id,
           email: result.user.email,
           name: result.profile?.name || '',
+          phone: result.profile?.phone || undefined,
           role: result.profile?.role || UserRole.PARTICIPANT,
         });
       }
@@ -148,13 +214,9 @@ const LoginSupabase: React.FC<LoginProps> = ({ onLogin }) => {
     setPassword('');
     setConfirmPassword('');
     setPhone('');
-    // Clear invite if switching modes
-    if (inviteCode) {
-      setInviteCode(null);
-      setInviteDetails(null);
-      // Clear URL params
-      window.history.replaceState({}, '', window.location.pathname);
-    }
+    if (!inviteCode) return;
+
+    setEmail(inviteDetails?.email || '');
   };
 
   return (
@@ -329,6 +391,21 @@ const LoginSupabase: React.FC<LoginProps> = ({ onLogin }) => {
               {isSignUp && (
                 <p className="mt-1 text-xs text-gray-500">
                   Must be at least 6 characters
+                </p>
+              )}
+              {!isSignUp && (
+                <button
+                  type="button"
+                  onClick={handleForgotPassword}
+                  disabled={isLoading}
+                  className="mt-2 text-sm font-medium text-indigo-600 hover:text-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Forgot password?
+                </button>
+              )}
+              {!isSignUp && (
+                <p className="mt-1 text-xs text-gray-500">
+                  Password reset emails are rate-limited by Supabase unless custom SMTP is configured.
                 </p>
               )}
             </div>

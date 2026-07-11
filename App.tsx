@@ -4,16 +4,25 @@ import Login from './components/LoginSupabase';
 import Dashboard from './components/Dashboard';
 import ProgramManagerDashboard from './components/ProgramManagerDashboard';
 import AdminDashboard from './components/AdminDashboard';
+import AccountSettingsPage from './components/AccountSettingsPage';
+import ResetPasswordPage from './components/ResetPasswordPage';
 import { User, UserRole } from './types';
 import { getUser, getUserProfileSecure, signOut, onAuthStateChange } from './src/lib/auth';
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [isCheckingSession, setIsCheckingSession] = useState(true);
+  const [isAccountSettingsOpen, setIsAccountSettingsOpen] = useState(false);
+  const isResetPasswordRoute = window.location.pathname === '/auth/reset-password';
 
   // Check for existing Supabase session on mount
   useEffect(() => {
     const checkSession = async () => {
+      if (isResetPasswordRoute) {
+        setIsCheckingSession(false);
+        return;
+      }
+
       try {
         const supabaseUser = await getUser();
         if (supabaseUser) {
@@ -24,6 +33,7 @@ const App: React.FC = () => {
               id: supabaseUser.id,
               email: supabaseUser.email || '',
               name: profile.name,
+              phone: profile.phone || undefined,
               role: profile.role as UserRole,
             });
           }
@@ -38,6 +48,10 @@ const App: React.FC = () => {
     checkSession();
 
     // Listen for auth state changes
+    if (isResetPasswordRoute) {
+      return;
+    }
+
     const { data: { subscription } } = onAuthStateChange(async (supabaseUser) => {
       if (supabaseUser) {
         // Use secure profile fetch with session verification
@@ -48,6 +62,7 @@ const App: React.FC = () => {
               id: supabaseUser.id,
               email: supabaseUser.email || '',
               name: profile.name,
+              phone: profile.phone || undefined,
               role: profile.role as UserRole,
             });
           }
@@ -62,22 +77,51 @@ const App: React.FC = () => {
     return () => {
       subscription.unsubscribe();
     };
-  }, []);
+  }, [isResetPasswordRoute]);
 
   const handleLogin = (loggedInUser: User) => {
     setUser(loggedInUser);
+    setIsAccountSettingsOpen(false);
   };
 
   const handleLogout = async () => {
     try {
       await signOut();
       setUser(null);
+      setIsAccountSettingsOpen(false);
     } catch (error) {
       console.error('Error signing out:', error);
     }
   };
 
+  const handleOpenAccountSettings = () => {
+    setIsAccountSettingsOpen(true);
+  };
+
+  const handleCloseAccountSettings = () => {
+    setIsAccountSettingsOpen(false);
+  };
+
+  const handleProfileUpdated = (updates: Partial<User>) => {
+    setUser((currentUser) => currentUser ? { ...currentUser, ...updates } : currentUser);
+  };
+
   // Show loading while checking session
+  if (isResetPasswordRoute) {
+    return <ResetPasswordPage />;
+  }
+
+  if (user && isAccountSettingsOpen) {
+    return (
+      <AccountSettingsPage
+        user={user}
+        onBack={handleCloseAccountSettings}
+        onLogout={handleLogout}
+        onProfileUpdated={handleProfileUpdated}
+      />
+    );
+  }
+
   if (isCheckingSession) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -93,12 +137,18 @@ const App: React.FC = () => {
     switch (user.role) {
       case UserRole.ADMIN:
         // Admins get dedicated admin dashboard with user management
-        return <AdminDashboard user={user} onLogout={handleLogout} />;
+        return <AdminDashboard user={user} onLogout={handleLogout} onAccountSettings={handleOpenAccountSettings} />;
       case UserRole.PROGRAM_MANAGER:
-        return <ProgramManagerDashboard user={user} onLogout={handleLogout} />;
+        return (
+          <ProgramManagerDashboard
+            user={user}
+            onLogout={handleLogout}
+            onAccountSettings={handleOpenAccountSettings}
+          />
+        );
       case UserRole.PARTICIPANT:
       default:
-        return <Dashboard user={user} onLogout={handleLogout} />;
+        return <Dashboard user={user} onLogout={handleLogout} onAccountSettings={handleOpenAccountSettings} />;
     }
   };
 

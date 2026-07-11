@@ -1,33 +1,59 @@
 import React, { useState, useEffect } from 'react';
 import { User, Milestone, AssignmentType, MilestoneStatus } from '../../types';
-import NotificationManager, { Notification } from '../../utils/notificationManager';
 import UserManager from '../../utils/userManager';
-import ProgramManager from '../../utils/programManager';
 import NotificationBadge from '../NotificationBadge';
+import { logAuditEvent } from '../../src/lib/audit';
+import {
+  AppNotification,
+  getMyNotifications,
+  markAllNotificationsRead,
+  markNotificationRead,
+  notifyDecline
+} from '../../src/lib/notifications';
 
 interface AssignmentsTabProps {
   user: User;
   milestones: Milestone[];
   onMilestonesUpdate: (milestones: Milestone[]) => void;
+  onAssignmentResponse?: (
+    milestoneId: string,
+    accepted: boolean,
+    comment: string
+  ) => Promise<void>;
 }
 
-const AssignmentsTab: React.FC<AssignmentsTabProps> = ({ user, milestones, onMilestonesUpdate }) => {
-  const [notifications, setNotifications] = useState<Notification[]>([]);
+const AssignmentsTab: React.FC<AssignmentsTabProps> = ({
+  user,
+  milestones,
+  onMilestonesUpdate,
+  onAssignmentResponse
+}) => {
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [declineReason, setDeclineReason] = useState('');
   const [decliningMilestoneId, setDecliningMilestoneId] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Load notifications
   useEffect(() => {
-    const loadNotifications = () => {
-      const userNotifications = NotificationManager.getNotifications(user.id);
-      setNotifications(userNotifications);
+    let cancelled = false;
+
+    const loadNotifications = async () => {
+      try {
+        const userNotifications = await getMyNotifications();
+        if (!cancelled) setNotifications(userNotifications);
+      } catch {
+        if (!cancelled) setNotifications([]);
+      }
     };
 
     loadNotifications();
-    // Refresh every 30 seconds
     const interval = setInterval(loadNotifications, 30000);
-    return () => clearInterval(interval);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [user.id]);
 
   // Filter assigned milestones
@@ -53,29 +79,51 @@ const AssignmentsTab: React.FC<AssignmentsTabProps> = ({ user, milestones, onMil
     m.assignmentInfo?.managerResponse?.accepted === false
   );
 
-  const handleAcceptAssignment = (milestoneId: string) => {
-    const updatedMilestones = milestones.map(m => {
-      if (m.id === milestoneId && m.assignmentInfo) {
-        return {
-          ...m,
-          assignmentInfo: {
-            ...m.assignmentInfo,
-            managerResponse: {
-              accepted: true,
-              comment: 'Assignment accepted by participant',
-              respondedAt: new Date().toISOString()
-            }
-          },
-          status: MilestoneStatus.IN_PROGRESS
-        };
-      }
-      return m;
-    });
+  const handleAcceptAssignment = async (milestoneId: string) => {
+    try {
+      setIsSaving(true);
+      setError(null);
+      if (onAssignmentResponse) {
+        await onAssignmentResponse(milestoneId, true, 'Assignment accepted by participant');
+      } else {
+        const updatedMilestones = milestones.map(m => {
+          if (m.id === milestoneId && m.assignmentInfo) {
+            return {
+              ...m,
+              assignmentInfo: {
+                ...m.assignmentInfo,
+                managerResponse: {
+                  accepted: true,
+                  comment: 'Assignment accepted by participant',
+                  respondedAt: new Date().toISOString()
+                }
+              },
+              status: MilestoneStatus.IN_PROGRESS
+            };
+          }
+          return m;
+        });
 
-    onMilestonesUpdate(updatedMilestones);
+        onMilestonesUpdate(updatedMilestones);
+      }
+
+      const milestone = milestones.find(m => m.id === milestoneId);
+      await logAuditEvent({
+        action: 'ACCEPT_MILESTONE',
+        programId: milestone?.programId,
+        metadata: {
+          assignmentId: milestoneId,
+          milestoneTitle: milestone?.title
+        }
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to accept assignment');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const handleDeclineAssignment = (milestoneId: string) => {
+  const handleDeclineAssignment = async (milestoneId: string) => {
     if (!declineReason.trim()) {
       alert('Please provide a reason for declining');
       return;
@@ -84,55 +132,68 @@ const AssignmentsTab: React.FC<AssignmentsTabProps> = ({ user, milestones, onMil
     const milestone = milestones.find(m => m.id === milestoneId);
     if (!milestone || !milestone.assignmentInfo) return;
 
-    // Update the milestone
-    const updatedMilestones = milestones.map(m => {
-      if (m.id === milestoneId && m.assignmentInfo) {
-        return {
-          ...m,
-          assignmentInfo: {
-            ...m.assignmentInfo,
-            declineReason: declineReason.trim(),
-            declinedAt: new Date().toISOString()
+    try {
+      setIsSaving(true);
+      setError(null);
+      if (onAssignmentResponse) {
+        await onAssignmentResponse(milestoneId, false, declineReason.trim());
+      } else {
+        const updatedMilestones = milestones.map(m => {
+          if (m.id === milestoneId && m.assignmentInfo) {
+            return {
+              ...m,
+              assignmentInfo: {
+                ...m.assignmentInfo,
+                declineReason: declineReason.trim(),
+                declinedAt: new Date().toISOString()
+              }
+            };
           }
-        };
+          return m;
+        });
+
+        onMilestonesUpdate(updatedMilestones);
       }
-      return m;
-    });
 
-    onMilestonesUpdate(updatedMilestones);
-
-    // Notify the manager
-    if (milestone.programId) {
-      const program = ProgramManager.getProgramById(milestone.programId);
-      if (program) {
-        program.managerIds.forEach(managerId => {
-          const manager = UserManager.getUserById(managerId);
-          if (manager) {
-            NotificationManager.notifyDecline(
-              managerId,
-              user.name,
-              milestone.title,
-              declineReason.trim(),
-              milestoneId,
-              user.id
-            );
-          }
+      if (milestone.assignmentInfo.assignedBy) {
+        await notifyDecline({
+          managerId: milestone.assignmentInfo.assignedBy,
+          participantName: user.name,
+          milestoneTitle: milestone.title,
+          reason: declineReason.trim(),
+          assignmentId: milestoneId,
+          participantId: user.id
         });
       }
+
+      await logAuditEvent({
+        action: 'DECLINE_MILESTONE',
+        targetUserId: milestone.assignmentInfo.assignedBy || null,
+        programId: milestone.programId,
+        metadata: {
+          assignmentId: milestoneId,
+          milestoneTitle: milestone.title,
+          reason: declineReason.trim()
+        }
+      });
+
+      setDeclineReason('');
+      setDecliningMilestoneId(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to decline assignment');
+    } finally {
+      setIsSaving(false);
     }
-
-    setDeclineReason('');
-    setDecliningMilestoneId(null);
   };
 
-  const markNotificationAsRead = (notificationId: string) => {
-    NotificationManager.markAsRead(user.id, notificationId);
-    setNotifications(NotificationManager.getNotifications(user.id));
+  const markNotificationAsRead = async (notificationId: string) => {
+    await markNotificationRead(notificationId);
+    setNotifications(await getMyNotifications());
   };
 
-  const markAllAsRead = () => {
-    NotificationManager.markAllAsRead(user.id);
-    setNotifications(NotificationManager.getNotifications(user.id));
+  const markAllAsRead = async () => {
+    await markAllNotificationsRead();
+    setNotifications(await getMyNotifications());
   };
 
   const formatDate = (dateString: string) => {
@@ -158,6 +219,16 @@ const AssignmentsTab: React.FC<AssignmentsTabProps> = ({ user, milestones, onMil
 
   return (
     <div className="space-y-6">
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md text-sm">
+          {error}
+        </div>
+      )}
+      {isSaving && (
+        <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-md text-sm">
+          Saving assignment changes...
+        </div>
+      )}
       {/* Header with Notifications */}
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-gray-900">My Assignments</h2>
@@ -351,7 +422,6 @@ const AssignmentsTab: React.FC<AssignmentsTabProps> = ({ user, milestones, onMil
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
                   {acceptedAssignments.map(milestone => {
-                    const program = milestone.programId ? ProgramManager.getProgramById(milestone.programId) : null;
                     return (
                       <tr key={milestone.id}>
                         <td className="px-6 py-4">
@@ -363,7 +433,7 @@ const AssignmentsTab: React.FC<AssignmentsTabProps> = ({ user, milestones, onMil
                           </div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="text-sm text-gray-900">{program?.name || 'N/A'}</div>
+                          <div className="text-sm text-gray-900">{milestone.programId || 'N/A'}</div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="text-sm text-gray-900">{formatDate(milestone.endDate)}</div>

@@ -1,14 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { User, Milestone, MilestoneCategory, MilestoneStatus, AssignmentType, Program } from '../types';
 import CloseIcon from './icons/CloseIcon';
-import ProgramManager from '../utils/programManager';
-import { v4 as uuidv4 } from 'uuid';
 
 interface AssignMilestoneModalProps {
   user: User; // The manager assigning
   programId: string;
   onClose: () => void;
   onAssign: (assignments: MilestoneAssignment[]) => void;
+  participants?: User[];
+  program?: Program | null;
+  milestoneCounts?: Record<string, number>;
 }
 
 interface MilestoneAssignment {
@@ -20,7 +21,10 @@ const AssignMilestoneModal: React.FC<AssignMilestoneModalProps> = ({
   user,
   programId,
   onClose,
-  onAssign
+  onAssign,
+  participants: providedParticipants,
+  program: providedProgram,
+  milestoneCounts = {}
 }) => {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -38,8 +42,8 @@ const AssignMilestoneModal: React.FC<AssignMilestoneModalProps> = ({
   const firstFocusableElementRef = useRef<HTMLInputElement>(null);
 
   // Get participants in the program
-  const participants = ProgramManager.getParticipantsInProgram(programId);
-  const program = ProgramManager.getProgramById(programId);
+  const participants = providedParticipants ?? [];
+  const program = providedProgram;
 
   // Accessibility: Focus trapping and Escape key
   useEffect(() => {
@@ -343,12 +347,7 @@ const AssignMilestoneModal: React.FC<AssignMilestoneModalProps> = ({
               ) : (
                 <div className="space-y-2 max-h-48 overflow-y-auto border border-gray-200 rounded-md p-3">
                   {participants.map(participant => {
-                    // Get existing milestones for this participant
-                    const milestoneKey = `gbw_milestones_${participant.id}`;
-                    const existingMilestones = localStorage.getItem(milestoneKey);
-                    const milestoneCount = existingMilestones
-                      ? JSON.parse(existingMilestones).filter((m: any) => m.programId === programId).length
-                      : 0;
+                    const milestoneCount = milestoneCounts[participant.id] ?? 0;
 
                     return (
                       <label key={participant.id} className="flex items-start">

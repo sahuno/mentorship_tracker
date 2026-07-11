@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Expense } from '../types';
 import CloseIcon from './icons/CloseIcon';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { analyzeReceipt, openProtectedReceipt } from '../src/lib/receiptOcr';
 
 interface AddExpenseModalProps {
   onClose: () => void;
   onSave: (expense: Expense | Omit<Expense, 'id'>) => void;
   expenseToEdit?: Expense | null;
+  cycleId?: string;
 }
 
 type OcrResult = {
@@ -15,14 +16,15 @@ type OcrResult = {
   date?: string;
 };
 
-const AddExpenseModal: React.FC<AddExpenseModalProps> = ({ onClose, onSave, expenseToEdit }) => {
+const AddExpenseModal: React.FC<AddExpenseModalProps> = ({ onClose, onSave, expenseToEdit, cycleId }) => {
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [item, setItem] = useState('');
   const [amount, setAmount] = useState('');
   const [contact, setContact] = useState('');
   const [remarks, setRemarks] = useState('');
-  const [receipt, setReceipt] = useState<File | null>(null);
   const [receiptPreview, setReceiptPreview] = useState<string | null>(null);
+  const [storedReceiptUrl, setStoredReceiptUrl] = useState<string | null>(expenseToEdit?.receiptUrl || null);
+  const [existingReceiptUrl, setExistingReceiptUrl] = useState<string | null>(expenseToEdit?.receiptUrl || null);
 
   const [isOcrLoading, setIsOcrLoading] = useState(false);
   const [ocrError, setOcrError] = useState<string | null>(null);
@@ -39,11 +41,27 @@ const AddExpenseModal: React.FC<AddExpenseModalProps> = ({ onClose, onSave, expe
       setAmount(String(expenseToEdit.amount));
       setContact(expenseToEdit.contact || '');
       setRemarks(expenseToEdit.remarks || '');
-      setReceiptPreview(expenseToEdit.receiptUrl || null);
-      setReceipt(null); // Reset file input as we can't pre-populate it
-      setOcrResults([]); // Clear OCR results when editing
+      setReceiptPreview(null);
+      setStoredReceiptUrl(expenseToEdit.receiptUrl || null);
+      setExistingReceiptUrl(expenseToEdit.receiptUrl || null);
+      setOcrResults([]);
+      setOcrError(null);
+    } else {
+      setReceiptPreview(null);
+      setStoredReceiptUrl(null);
+      setExistingReceiptUrl(null);
+      setOcrResults([]);
+      setOcrError(null);
     }
   }, [expenseToEdit]);
+
+  useEffect(() => {
+    return () => {
+      if (receiptPreview?.startsWith('blob:')) {
+        URL.revokeObjectURL(receiptPreview);
+      }
+    };
+  }, [receiptPreview]);
 
   // Accessibility: Focus trapping and Escape key
   useEffect(() => {
@@ -82,78 +100,42 @@ const AddExpenseModal: React.FC<AddExpenseModalProps> = ({ onClose, onSave, expe
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [onClose]);
-  
-  const runOcr = async (file: File) => {
-    if (!process.env.API_KEY) {
-      setOcrError("API key is not configured.");
-      return;
-    }
-    setIsOcrLoading(true);
-    setOcrError(null);
-    setOcrResults([]);
-
-    try {
-      const genAI = new GoogleGenerativeAI(process.env.API_KEY || process.env.GEMINI_API_KEY || '');
-      const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-
-      const base64Data = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.readAsDataURL(file);
-        reader.onload = () => resolve((reader.result as string).split(',')[1]);
-        reader.onerror = error => reject(error);
-      });
-
-      const imagePart = {
-        inlineData: {
-          data: base64Data,
-          mimeType: file.type,
-        },
-      };
-
-      const prompt = "Analyze this receipt. Extract all distinct expense items. For each item, provide its description, total amount, and the date of the transaction. Use the receipt's main date if an individual item doesn't have a specific date. Respond with a JSON array of objects with the following structure: [{item: string, amount: number, date?: string}]";
-
-      const result = await model.generateContent([prompt, imagePart]);
-      const response = await result.response;
-      const text = response.text();
-
-      // Extract JSON from the response (handle cases where response has markdown code blocks)
-      let jsonText = text;
-      if (text.includes('```json')) {
-        jsonText = text.match(/```json\n?([\s\S]*?)\n?```/)?.[1] || text;
-      } else if (text.includes('```')) {
-        jsonText = text.match(/```\n?([\s\S]*?)\n?```/)?.[1] || text;
-      }
-
-      const parsedResults = JSON.parse(jsonText);
-      if (Array.isArray(parsedResults) && parsedResults.length > 0) {
-        setOcrResults(parsedResults);
-      } else {
-        setOcrError("No expenses could be extracted from the receipt. Please enter details manually.");
-      }
-
-    } catch (err) {
-      console.error("OCR Error:", err);
-      setOcrError("Failed to analyze receipt. Please try again or enter details manually.");
-    } finally {
-      setIsOcrLoading(false);
-    }
-  };
 
 
   const handleReceiptChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
-      setReceipt(file);
-      
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setReceiptPreview(reader.result as string);
-      };
-      reader.readAsDataURL(file);
-      
-      if (!isEditing) { // Only run OCR for new expenses
-         runOcr(file);
+      if (receiptPreview?.startsWith('blob:')) {
+        URL.revokeObjectURL(receiptPreview);
       }
+
+      setReceiptPreview(URL.createObjectURL(file));
+      // Clear only the pending new-upload URL. Do NOT clear existingReceiptUrl:
+      // the previously-attached receipt must survive until the replacement upload
+      // actually succeeds, so a failed re-upload never destroys the prior receipt.
+      setStoredReceiptUrl(null);
+      setOcrError(null);
+      setOcrResults([]);
+
+      setIsOcrLoading(true);
+      void analyzeReceipt(file, cycleId)
+        .then((result) => {
+          if (result.receiptUrl) {
+            // New upload succeeded: it replaces the previous receipt on save.
+            setStoredReceiptUrl(result.receiptUrl);
+          }
+          setOcrResults(result.ocrResults);
+          setOcrError(result.analysisError || null);
+        })
+        .catch((err: unknown) => {
+          console.error('OCR Error:', err);
+          // Upload/analysis failed: keep existingReceiptUrl intact so saving falls
+          // back to the original receipt instead of persisting an empty value.
+          setOcrError(err instanceof Error ? err.message : 'Failed to analyze receipt. Please try again or enter details manually.');
+        })
+        .finally(() => {
+          setIsOcrLoading(false);
+        });
     }
   };
   
@@ -170,16 +152,34 @@ const AddExpenseModal: React.FC<AddExpenseModalProps> = ({ onClose, onSave, expe
     }
   };
 
+  const handleOpenExistingReceipt = async () => {
+    if (!existingReceiptUrl) {
+      return;
+    }
+
+    try {
+      await openProtectedReceipt(existingReceiptUrl);
+    } catch (error) {
+      console.error('Failed to open receipt:', error);
+      setOcrError(error instanceof Error ? error.message : 'Failed to open receipt.');
+    }
+  };
+
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    // Guard: never save while a receipt upload/OCR is still in flight, otherwise the
+    // expense persists with receiptUrl: undefined despite the visible preview.
+    if (isOcrLoading) {
+      return;
+    }
     const expenseData = {
       date,
       item,
       amount: parseFloat(amount),
       contact,
       remarks,
-      receiptUrl: receiptPreview || undefined,
+      receiptUrl: storedReceiptUrl || existingReceiptUrl || undefined,
     };
 
     if (isEditing) {
@@ -231,7 +231,22 @@ const AddExpenseModal: React.FC<AddExpenseModalProps> = ({ onClose, onSave, expe
               <label className="block text-sm font-medium text-gray-700">Upload Receipt (Optional)</label>
               <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-md">
                 <div className="space-y-1 text-center">
-                  {receiptPreview ? <img src={receiptPreview} alt="Receipt Preview" className="mx-auto h-24 w-auto"/> : <svg className="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48" aria-hidden="true"><path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" /></svg>}
+                  {receiptPreview ? (
+                    <img src={receiptPreview} alt="Receipt Preview" className="mx-auto h-24 w-auto"/>
+                  ) : existingReceiptUrl ? (
+                    <div className="space-y-2">
+                      <p className="text-sm text-gray-600">A receipt is already attached to this expense.</p>
+                      <button
+                        type="button"
+                        onClick={handleOpenExistingReceipt}
+                        className="inline-flex items-center justify-center rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-indigo-600 hover:bg-indigo-50"
+                      >
+                        Open existing receipt
+                      </button>
+                    </div>
+                  ) : (
+                    <svg className="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48" aria-hidden="true"><path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" /></svg>
+                  )}
                   <div className="flex text-sm text-gray-600">
                     <label htmlFor="file-upload" className="relative cursor-pointer bg-white rounded-md font-medium text-indigo-600 hover:text-indigo-500 focus-within:outline-none focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-indigo-500">
                       <span>Upload a file</span>
@@ -239,7 +254,7 @@ const AddExpenseModal: React.FC<AddExpenseModalProps> = ({ onClose, onSave, expe
                     </label>
                     <p className="pl-1">or drag and drop</p>
                   </div>
-                  <p className="text-xs text-gray-500">PNG, JPG, GIF up to 10MB</p>
+                  <p className="text-xs text-gray-500">PNG, JPG, GIF, WEBP up to 10MB</p>
                 </div>
               </div>
               {isOcrLoading && <p className="mt-2 text-center text-sm text-indigo-600 animate-pulse">Analyzing receipt...</p>}
@@ -267,7 +282,7 @@ const AddExpenseModal: React.FC<AddExpenseModalProps> = ({ onClose, onSave, expe
           </div>
           <div className="p-6 bg-gray-50 flex justify-end gap-3">
             <button type="button" onClick={onClose} className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 transition-colors duration-200">Cancel</button>
-            <button type="submit" className="px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 transition-colors duration-200">{isEditing ? 'Save Changes' : 'Add Expense'}</button>
+            <button type="submit" disabled={isOcrLoading} aria-busy={isOcrLoading} title={isOcrLoading ? 'Please wait for the receipt to finish uploading' : undefined} className="px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-indigo-600">{isOcrLoading ? 'Uploading receipt...' : isEditing ? 'Save Changes' : 'Add Expense'}</button>
           </div>
         </form>
       </div>

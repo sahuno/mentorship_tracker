@@ -5,6 +5,7 @@ import {
   decodeReceiptPath,
   encodeReceiptPath,
   isSupportedReceiptFile,
+  normalizeReceiptItem,
   parseReceiptOcrResponse,
   type ReceiptOcrResponse,
   type ReceiptOcrResult,
@@ -91,38 +92,6 @@ export async function openProtectedReceipt(receiptUrl: string) {
   popup.location.href = objectUrl
   popup.focus()
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000)
-}
-
-function normalizeReceiptItem(entry: unknown): ReceiptOcrResult | null {
-  if (!entry || typeof entry !== 'object') {
-    return null
-  }
-
-  const candidate = entry as Record<string, unknown>
-  const item = typeof candidate.item === 'string'
-    ? candidate.item.trim()
-    : typeof candidate.description === 'string'
-      ? candidate.description.trim()
-      : ''
-  const amount = typeof candidate.amount === 'number'
-    ? candidate.amount
-    : typeof candidate.amount === 'string'
-      ? Number(candidate.amount)
-      : Number.NaN
-
-  if (!item || !Number.isFinite(amount)) {
-    return null
-  }
-
-  const date = typeof candidate.date === 'string' && candidate.date.trim()
-    ? candidate.date.trim()
-    : undefined
-
-  return {
-    item,
-    amount,
-    date,
-  }
 }
 
 async function safeJson(response: Response) {

@@ -91,7 +91,7 @@ function extractJsonPayload(text: string) {
   return objectMatch?.[0] ?? null
 }
 
-function normalizeReceiptItem(entry: unknown): ReceiptOcrResult | null {
+export function normalizeReceiptItem(entry: unknown): ReceiptOcrResult | null {
   if (!entry || typeof entry !== 'object') {
     return null
   }

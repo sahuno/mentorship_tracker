@@ -1,61 +1,13 @@
-import { createClient } from '@supabase/supabase-js'
-import type { Database } from '../../src/lib/database.types'
 import { decodeReceiptPath } from '../../src/lib/receiptOcrShared'
+import {
+  canAccessCycle,
+  createServiceClient,
+  createSupabaseClient,
+  jsonError,
+} from '../_lib/supabaseServer'
 
 export const config = {
   runtime: 'edge',
-}
-
-function getEnvValue(...keys: string[]) {
-  for (const key of keys) {
-    const value = process.env[key]
-    if (value) {
-      return value
-    }
-  }
-
-  return undefined
-}
-
-function createSupabaseClient(authHeader?: string) {
-  const supabaseUrl = getEnvValue('SUPABASE_URL', 'VITE_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_URL')
-  const supabaseAnonKey = getEnvValue('SUPABASE_ANON_KEY', 'VITE_SUPABASE_ANON_KEY', 'NEXT_PUBLIC_SUPABASE_ANON_KEY')
-
-  if (!supabaseUrl || !supabaseAnonKey) {
-    throw new Error('Supabase server configuration is missing.')
-  }
-
-  return createClient<Database>(supabaseUrl, supabaseAnonKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-      detectSessionInUrl: false,
-    },
-    global: {
-      headers: authHeader ? { Authorization: authHeader } : {},
-    },
-  })
-}
-
-function createServiceClient() {
-  const supabaseUrl = getEnvValue('SUPABASE_URL', 'VITE_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_URL')
-  const supabaseServiceKey = getEnvValue('SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_SERVICE_KEY')
-
-  if (!supabaseUrl || !supabaseServiceKey) {
-    throw new Error('Supabase service configuration is missing.')
-  }
-
-  return createClient<Database>(supabaseUrl, supabaseServiceKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-      detectSessionInUrl: false,
-    },
-  })
-}
-
-function jsonError(message: string, status = 400) {
-  return Response.json({ error: message }, { status })
 }
 
 function guessContentType(receiptPath: string) {
@@ -149,24 +101,9 @@ export default async function handler(request: Request) {
       return jsonError('Access denied.', 403)
     }
 
-    const isOwner = cycle.participant_id === user.id
-    const isAdmin = profile.role === 'admin'
+    const isAuthorized = await canAccessCycle(serviceClient, user.id, profile.role, cycle)
 
-    let isManager = false
-
-    if (!isOwner && !isAdmin && cycle.program_id) {
-      const { data: program, error: programError } = await serviceClient
-        .from('programs')
-        .select('manager_id')
-        .eq('id', cycle.program_id)
-        .single()
-
-      if (!programError && program) {
-        isManager = program.manager_id === user.id
-      }
-    }
-
-    if (!isOwner && !isAdmin && !isManager) {
+    if (!isAuthorized) {
       return jsonError('Access denied.', 403)
     }
 

@@ -1,5 +1,4 @@
 import React, { useState, useMemo } from 'react';
-import { v4 as uuidv4 } from 'uuid';
 import { User, Milestone, MilestoneStatus, MilestoneCategory, ProgressReport } from '../../types';
 import MilestoneCard from '../MilestoneCard';
 import AddMilestoneModal from '../AddMilestoneModal';
@@ -92,9 +91,6 @@ const MilestoneTab: React.FC<MilestoneTabProps> = ({
       setError(null);
       if (onDeleteMilestone) {
         await onDeleteMilestone(milestoneId);
-      } else {
-        const updatedMilestones = milestones.filter(m => m.id !== milestoneId);
-        onMilestonesUpdate(updatedMilestones);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete milestone');
@@ -110,22 +106,6 @@ const MilestoneTab: React.FC<MilestoneTabProps> = ({
 
       if (onSaveMilestone) {
         await onSaveMilestone(milestoneData, editingMilestone);
-      } else if (editingMilestone) {
-        const updatedMilestones = milestones.map(m =>
-          m.id === editingMilestone.id
-            ? { ...m, ...milestoneData }
-            : m
-        );
-        onMilestonesUpdate(updatedMilestones);
-      } else {
-        const newMilestone: Milestone = {
-          ...milestoneData,
-          id: uuidv4(),
-          userId: user.id,
-          createdAt: new Date().toISOString(),
-          progressReports: []
-        };
-        onMilestonesUpdate([...milestones, newMilestone]);
       }
       setIsAddModalOpen(false);
     } catch (err) {
@@ -149,19 +129,6 @@ const MilestoneTab: React.FC<MilestoneTabProps> = ({
 
       if (onSaveProgressReport) {
         await onSaveProgressReport(reportingMilestone.id, report);
-      } else {
-        const newReport: ProgressReport = {
-          ...report,
-          id: uuidv4()
-        };
-
-        const updatedMilestones = milestones.map(m =>
-          m.id === reportingMilestone.id
-            ? { ...m, progressReports: [...m.progressReports, newReport] }
-            : m
-        );
-
-        onMilestonesUpdate(updatedMilestones);
       }
       setIsReportModalOpen(false);
     } catch (err) {
@@ -177,13 +144,6 @@ const MilestoneTab: React.FC<MilestoneTabProps> = ({
       setError(null);
       if (onUpdateStatus) {
         await onUpdateStatus(milestoneId, newStatus);
-      } else {
-        const updatedMilestones = milestones.map(m =>
-          m.id === milestoneId
-            ? { ...m, status: newStatus }
-            : m
-        );
-        onMilestonesUpdate(updatedMilestones);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update milestone status');

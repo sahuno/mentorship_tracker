@@ -1,5 +1,4 @@
 import React, { useState, useMemo } from 'react';
-import { v4 as uuidv4 } from 'uuid';
 import { User, BalanceSheetCycle, Expense } from '../../types';
 import BalanceSheet from '../BalanceSheet';
 import AddExpenseModal from '../AddExpenseModal';
@@ -120,20 +119,7 @@ const FinanceTab: React.FC<FinanceTabProps> = ({
       } finally {
         setIsSaving(false);
       }
-      return;
     }
-
-    const newCycles = cycles.map(c => ({ ...c, isActive: false }));
-    const newCycle: BalanceSheetCycle = {
-      id: uuidv4(),
-      startDate,
-      endDate,
-      budget,
-      expenses: [],
-      isActive: true,
-    };
-    onCyclesUpdate([...newCycles, newCycle]);
-    setNewCycleModalOpen(false);
   };
 
   const handleSaveExpense = async (expenseData: Expense | Omit<Expense, 'id'>) => {
@@ -150,26 +136,7 @@ const FinanceTab: React.FC<FinanceTabProps> = ({
       } finally {
         setIsSaving(false);
       }
-      return;
     }
-
-    let updatedCycles;
-    if ('id' in expenseData) { // Editing existing expense
-      updatedCycles = cycles.map(c =>
-        c.id === activeCycle.id
-          ? { ...c, expenses: c.expenses.map(e => e.id === expenseData.id ? expenseData : e) }
-          : c
-      );
-    } else { // Adding new expense
-      const newExpense: Expense = { ...expenseData, id: uuidv4() };
-      updatedCycles = cycles.map(c =>
-        c.id === activeCycle.id
-          ? { ...c, expenses: [...c.expenses, newExpense] }
-          : c
-      );
-    }
-    onCyclesUpdate(updatedCycles);
-    handleCloseExpenseModal();
   };
 
   const handleDeleteExpense = async (expenseId: string) => {
@@ -185,15 +152,7 @@ const FinanceTab: React.FC<FinanceTabProps> = ({
       } finally {
         setIsSaving(false);
       }
-      return;
     }
-
-    const updatedCycles = cycles.map(c =>
-      c.id === activeCycle.id
-        ? { ...c, expenses: c.expenses.filter(e => e.id !== expenseId) }
-        : c
-    );
-    onCyclesUpdate(updatedCycles);
   };
 
   return (

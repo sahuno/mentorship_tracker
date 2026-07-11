@@ -85,26 +85,6 @@ const AssignmentsTab: React.FC<AssignmentsTabProps> = ({
       setError(null);
       if (onAssignmentResponse) {
         await onAssignmentResponse(milestoneId, true, 'Assignment accepted by participant');
-      } else {
-        const updatedMilestones = milestones.map(m => {
-          if (m.id === milestoneId && m.assignmentInfo) {
-            return {
-              ...m,
-              assignmentInfo: {
-                ...m.assignmentInfo,
-                managerResponse: {
-                  accepted: true,
-                  comment: 'Assignment accepted by participant',
-                  respondedAt: new Date().toISOString()
-                }
-              },
-              status: MilestoneStatus.IN_PROGRESS
-            };
-          }
-          return m;
-        });
-
-        onMilestonesUpdate(updatedMilestones);
       }
 
       const milestone = milestones.find(m => m.id === milestoneId);
@@ -137,22 +117,6 @@ const AssignmentsTab: React.FC<AssignmentsTabProps> = ({
       setError(null);
       if (onAssignmentResponse) {
         await onAssignmentResponse(milestoneId, false, declineReason.trim());
-      } else {
-        const updatedMilestones = milestones.map(m => {
-          if (m.id === milestoneId && m.assignmentInfo) {
-            return {
-              ...m,
-              assignmentInfo: {
-                ...m.assignmentInfo,
-                declineReason: declineReason.trim(),
-                declinedAt: new Date().toISOString()
-              }
-            };
-          }
-          return m;
-        });
-
-        onMilestonesUpdate(updatedMilestones);
       }
 
       if (milestone.assignmentInfo.assignedBy) {

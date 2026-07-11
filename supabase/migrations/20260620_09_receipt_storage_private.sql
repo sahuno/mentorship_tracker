@@ -1,96 +1,43 @@
--- Private storage bucket and access policies for cycle-scoped receipt uploads.
+-- Private storage bucket for cycle-scoped receipt uploads.
 --
--- storage.objects and storage.buckets are owned by supabase_storage_admin, not
--- postgres. `supabase db push` connects as postgres, which cannot ALTER or add
--- policies to those tables directly and fails with:
---   ERROR: 42501: must be owner of table objects
--- On hosted Supabase the postgres role is a member of supabase_storage_admin,
--- so we SET ROLE to it for the storage DDL, then RESET. This is the supported
--- way to manage storage RLS from a migration.
+-- SECURITY MODEL (why this migration only creates the bucket):
+--   The browser NEVER accesses Supabase Storage directly. Both receipt upload
+--   (api/receipt-ocr.ts) and receipt viewing (api/receipts/[token].ts) go
+--   through edge functions that use the SERVICE-ROLE client (which bypasses
+--   storage RLS) and perform their own authorization: authenticate the JWT,
+--   then verify the caller is the cycle's participant, an admin, or the
+--   program's manager. The security boundary is therefore:
+--     (1) this bucket being PRIVATE (public = false), and
+--     (2) the service-role edge functions doing per-request authorization.
+--
+--   RLS policies on storage.objects only govern DIRECT client access, which
+--   this app does not use, so they are DEFENSE-IN-DEPTH, not the gate.
+--
+-- WHY THE storage.objects POLICIES ARE NOT IN THIS MIGRATION:
+--   storage.objects and storage.buckets are owned by supabase_storage_admin.
+--   On hosted Supabase, `supabase db push` and the management API run as the
+--   `postgres` role, which is NOT a member of supabase_storage_admin, so
+--   `ALTER TABLE storage.objects` / `CREATE POLICY ON storage.objects` fail
+--   with 42501 (must be owner) and roll back the whole migration. postgres CAN
+--   insert/update storage.buckets, so bucket setup lives here (db-push-safe),
+--   while the optional direct-client RLS policies live in
+--   scripts/storage_receipts_policies.sql to be run from the Dashboard SQL
+--   editor (which runs as a privileged role). See docs/SECURITY_REMEDIATION.md
+--   (#1 / N2).
+--
+-- Idempotent: safe to re-run.
 
-SET ROLE supabase_storage_admin;
-
-INSERT INTO storage.buckets (id, name, public)
-VALUES ('receipts', 'receipts', false)
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+  'receipts',
+  'receipts',
+  false,
+  10485760, -- 10 MB, matches MAX_RECEIPT_FILE_SIZE_BYTES in src/lib/receiptOcrShared.ts
+  ARRAY['image/jpeg', 'image/png', 'image/webp', 'image/gif']
+)
 ON CONFLICT (id) DO UPDATE
 SET
   name = EXCLUDED.name,
-  public = false;
-
--- RLS is enabled on storage.objects by default; kept for explicitness. Safe as
--- the storage-admin owner (would raise must-be-owner as postgres).
-ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS "Authenticated users can upload cycle receipts" ON storage.objects;
-DROP POLICY IF EXISTS "Users can view cycle receipts" ON storage.objects;
-DROP POLICY IF EXISTS "Users can delete cycle receipts" ON storage.objects;
-
-CREATE POLICY "Authenticated users can upload cycle receipts" ON storage.objects
-  FOR INSERT
-  TO authenticated
-  WITH CHECK (
-    bucket_id = 'receipts'
-    AND split_part(name, '/', 1) = 'receipts'
-    AND EXISTS (
-      SELECT 1
-      FROM balance_cycles bc
-      JOIN profiles p ON p.id = auth.uid()
-      LEFT JOIN programs pr ON pr.id = bc.program_id
-      WHERE bc.id::text = split_part(name, '/', 2)
-        AND (
-          bc.participant_id = auth.uid()
-          OR p.role = 'admin'
-          OR pr.manager_id = auth.uid()
-        )
-    )
-  );
-
-CREATE POLICY "Users can view cycle receipts" ON storage.objects
-  FOR SELECT
-  TO authenticated
-  USING (
-    bucket_id = 'receipts'
-    AND split_part(name, '/', 1) = 'receipts'
-    AND (
-      EXISTS (
-        SELECT 1
-        FROM balance_cycles bc
-        WHERE bc.id::text = split_part(name, '/', 2)
-          AND bc.participant_id = auth.uid()
-      )
-      OR public.is_admin()
-      OR EXISTS (
-        SELECT 1
-        FROM balance_cycles bc
-        JOIN programs pr ON pr.id = bc.program_id
-        WHERE bc.id::text = split_part(name, '/', 2)
-          AND pr.manager_id = auth.uid()
-      )
-    )
-  );
-
-CREATE POLICY "Users can delete cycle receipts" ON storage.objects
-  FOR DELETE
-  TO authenticated
-  USING (
-    bucket_id = 'receipts'
-    AND split_part(name, '/', 1) = 'receipts'
-    AND (
-      EXISTS (
-        SELECT 1
-        FROM balance_cycles bc
-        WHERE bc.id::text = split_part(name, '/', 2)
-          AND bc.participant_id = auth.uid()
-      )
-      OR public.is_admin()
-      OR EXISTS (
-        SELECT 1
-        FROM balance_cycles bc
-        JOIN programs pr ON pr.id = bc.program_id
-        WHERE bc.id::text = split_part(name, '/', 2)
-          AND pr.manager_id = auth.uid()
-      )
-    )
-  );
-
-RESET ROLE;
+  public = false,
+  file_size_limit = EXCLUDED.file_size_limit,
+  allowed_mime_types = EXCLUDED.allowed_mime_types;

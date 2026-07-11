@@ -7,7 +7,7 @@
 **Target database:** `rlqaoecdzkrshidpljwb` ("golden-bridge-tracker-restored") — the ACTIVE restored project. NOTE the deployed Vercel frontend still points at the OLD inactive project `uedwlvucyyxjenoggpwu` (see N4).
 **How fixes are applied:** `npx supabase db push` is currently UNSAFE (see N1). Migrations are applied directly via the Supabase **management API** as `postgres` (public-schema objects only) and verified against the live schema. `_09` storage is the exception — it needs manual Dashboard application (see N2).
 
-> **Two kinds of "done":** DB/migration fixes are applied to the restored DB (live). **Code fixes live only in the working tree** — they are NOT committed or deployed, and the deployed frontend still points at the old project (N4). Users don't get code fixes until the tree is committed and the app is repointed + redeployed.
+> **Two kinds of "done":** DB/migration fixes are applied to the restored DB (live). **Code fixes are committed on branch `security-remediation`** (6 logical commits, 2026-07-11) but NOT merged to `main` or deployed, and the deployed frontend still points at the old project (N4). Users don't get code fixes until the branch is merged and the app is repointed + redeployed.
 
 ## Status legend
 - ✅ DONE — applied to the live restored DB and/or fixed in the working tree and verified (struck through in lists below)
@@ -41,7 +41,7 @@
 | N3 | MED | Restored DB password unavailable + CLI login-role broken | ⛔ OPEN | needs user/password | — |
 | N4 | HIGH | Vercel frontend points at OLD inactive project; code fixes undeployed | ⛔ OPEN | env realignment + redeploy | — |
 | N5 | LOW | Direct API fixes not recorded in migration ledger | ⛔ OPEN (accepted) | idempotent | — |
-| N6 | MEDIUM | Leftover test admin account on live DB | ⛔ OPEN | delete test admin | — |
+| N6 | MEDIUM | Leftover test admin account on live DB | ✅ DONE | deleted user + 2 test invites | live DB |
 
 ---
 
@@ -82,7 +82,7 @@
 - [ ] ⛔ **N3 — MEDIUM · Restored DB password unavailable + CLI login-role broken.** Blocks `supabase db push`/`migration list/repair`/psql. Management-API-as-postgres is the working path for public-schema DDL.
 - [ ] ⛔ **N4 — HIGH · Vercel frontend points at OLD inactive project; code fixes undeployed.** Deployed bundle (`b5b2a79`) has `uedwlvucyyxjenoggpwu` (INACTIVE) baked in; local + fixes target `rlqaoecdzkrshidpljwb`. All code fixes (#4 client, #6, #7, #8, #10) sit in the working tree, uncommitted/undeployed. Fix: pick the canonical project, realign Vercel + `.env.local`, commit, redeploy.
 - [ ] ⛔ **N5 — LOW (accepted) · Direct API fixes not recorded in the ledger.** `_10/_11/_12/_13/_14` applied via management API, absent from `schema_migrations`. All idempotent. Fold into N1 reconciliation.
-- [ ] ⛔ **N6 — MEDIUM · Leftover test admin account on live DB.** `browser-admin-20260620154643@example.com` has role `admin` on the restored DB (created during 2026-06-20 browser testing, possibly via the then-open S1 hole). Recommend deleting this account (auth user + profile). Not auto-deleted (prod account deletion). Verify it's not needed, then remove.
+- [x] ~~**N6 — MEDIUM · Leftover test admin account on live DB.**~~ **DONE (2026-07-11)** — verified the account owned nothing (0 programs/enrollments/cycles/milestones/notifications), then deleted the auth user via the Auth Admin API (profile cascaded). It had also created 2 junk pending elevated-role invites (`browser-invited-admin@example.com`, `browser-invited-manager@example.com`) which were deleted first (FK `invites.invited_by`). Only real admin `ekwame001@gmail.com` remains.
 
 ---
 
@@ -97,15 +97,15 @@
 | 2026-07-11 | `20260620_13` (allow `'paused'` status) | mgmt API as postgres | ✅ verified (#5) |
 | 2026-07-11 | `20260620_14` (manager expense write policies) | mgmt API as postgres | ✅ verified (#4) |
 | 2026-07-11 | read-only check: no stray admin invite for seed email | mgmt API as postgres | ✅ clean (#9) |
+| 2026-07-11 | delete leftover test admin + 2 test invites | Auth Admin API + mgmt API | ✅ verified (N6) |
+| 2026-07-11 | commit all working-tree work in 6 logical chunks | git branch `security-remediation` | ✅ (not merged/pushed) |
 
-Code-only fixes (#4 client, #6, #7, #8, #10) are in the working tree, verified by `tsc --noEmit` (exit 0), NOT yet committed or deployed (see N4).
+Code-only fixes (#4 client, #6, #7, #8, #10) are committed on branch `security-remediation` (verified `tsc --noEmit` exit 0), NOT merged to `main` or deployed (see N4).
 
 ---
 
 ## Suggested next steps (in order)
-1. **N6** — remove the leftover test admin account (quick, security hygiene).
-2. **Commit** the working-tree code fixes in logical chunks (they're verified but uncommitted).
-3. **#1 / N2** — rework `_09` into a Dashboard-ready storage policy script.
-4. **Cleanup themes** — N+1 queries, duplication, dead weight, dev proxy (follow-up agent round).
-5. **N1 / N3 / N5** — reconcile the migration ledger (needs the DB password) so `db push` becomes usable again.
-6. **N4** — realign environments, repoint + redeploy the app so the code fixes reach users.
+1. **#1 / N2** — rework `_09` into a Dashboard-ready storage policy script.
+2. **Cleanup themes** — N+1 queries, duplication, dead weight, dev proxy (follow-up agent round).
+3. **N1 / N3 / N5** — reconcile the migration ledger (needs the DB password) so `db push` becomes usable again.
+4. **N4** — realign environments, merge `security-remediation`, repoint + redeploy the app so the code fixes reach users.

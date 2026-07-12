@@ -92,21 +92,27 @@ export async function createMilestoneAssignments(
 ): Promise<Milestone[]> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Not authenticated');
+  if (assignments.length === 0) return [];
 
-  const created: Milestone[] = [];
+  // Every assignment in a single call shares one milestone definition (the
+  // assign modal maps the same milestone to N participants; self-create passes
+  // one). Create a SINGLE milestone row and link each participant through the
+  // milestone_assignments junction table, rather than duplicating the milestone
+  // per participant.
+  const shared = assignments[0].milestone;
 
-  for (const assignment of assignments) {
-    const { data: milestone, error: milestoneError } = await supabase
-      .from('milestones')
-      .insert(milestoneFormToDbInsert(programId, assignment.milestone))
-      .select()
-      .single();
+  const { data: milestone, error: milestoneError } = await supabase
+    .from('milestones')
+    .insert(milestoneFormToDbInsert(programId, shared))
+    .select()
+    .single();
 
-    if (milestoneError) throw milestoneError;
+  if (milestoneError) throw milestoneError;
 
-    const { data: dbAssignment, error: assignmentError } = await supabase
-      .from('milestone_assignments')
-      .insert({
+  const { data: dbAssignments, error: assignmentError } = await supabase
+    .from('milestone_assignments')
+    .insert(
+      assignments.map((assignment) => ({
         milestone_id: milestone.id,
         participant_id: assignment.participantId,
         status: dbStatusFromMilestoneStatus(assignment.milestone.status),
@@ -114,19 +120,19 @@ export async function createMilestoneAssignments(
         is_required: assignment.milestone.assignmentInfo?.isRequired ?? true,
         can_decline: assignment.milestone.assignmentInfo?.canDecline ?? false,
         assigned_by: user.id
-      })
-      .select(`
-        *,
-        milestone:milestone_id (*),
-        progress_reports (*)
-      `)
-      .single();
+      }))
+    )
+    .select(`
+      *,
+      milestone:milestone_id (*),
+      progress_reports (*)
+    `);
 
-    if (assignmentError) throw assignmentError;
-    created.push(dbMilestoneAssignmentToMilestone(dbAssignment as any));
-  }
+  if (assignmentError) throw assignmentError;
 
-  return created;
+  return ((dbAssignments || []) as any[]).map((dbAssignment) =>
+    dbMilestoneAssignmentToMilestone(dbAssignment as any)
+  );
 }
 
 export async function createSelfMilestone(

@@ -32,13 +32,13 @@ CREATE POLICY "Authenticated users can upload cycle receipts" ON storage.objects
   TO authenticated
   WITH CHECK (
     bucket_id = 'receipts'
-    AND split_part(name, '/', 1) = 'receipts'
+    AND split_part(storage.objects.name, '/', 1) = 'receipts'
     AND EXISTS (
       SELECT 1
       FROM balance_cycles bc
       JOIN profiles p ON p.id = auth.uid()
       LEFT JOIN programs pr ON pr.id = bc.program_id
-      WHERE bc.id::text = split_part(name, '/', 2)
+      WHERE bc.id::text = split_part(storage.objects.name, '/', 2)
         AND (
           bc.participant_id = auth.uid()
           OR p.role = 'admin'
@@ -53,18 +53,18 @@ CREATE POLICY "Users can view cycle receipts" ON storage.objects
   TO authenticated
   USING (
     bucket_id = 'receipts'
-    AND split_part(name, '/', 1) = 'receipts'
+    AND split_part(storage.objects.name, '/', 1) = 'receipts'
     AND (
       EXISTS (
         SELECT 1 FROM balance_cycles bc
-        WHERE bc.id::text = split_part(name, '/', 2)
+        WHERE bc.id::text = split_part(storage.objects.name, '/', 2)
           AND bc.participant_id = auth.uid()
       )
       OR public.is_admin()
       OR EXISTS (
         SELECT 1 FROM balance_cycles bc
         JOIN programs pr ON pr.id = bc.program_id
-        WHERE bc.id::text = split_part(name, '/', 2)
+        WHERE bc.id::text = split_part(storage.objects.name, '/', 2)
           AND pr.manager_id = auth.uid()
       )
     )
@@ -76,18 +76,18 @@ CREATE POLICY "Users can delete cycle receipts" ON storage.objects
   TO authenticated
   USING (
     bucket_id = 'receipts'
-    AND split_part(name, '/', 1) = 'receipts'
+    AND split_part(storage.objects.name, '/', 1) = 'receipts'
     AND (
       EXISTS (
         SELECT 1 FROM balance_cycles bc
-        WHERE bc.id::text = split_part(name, '/', 2)
+        WHERE bc.id::text = split_part(storage.objects.name, '/', 2)
           AND bc.participant_id = auth.uid()
       )
       OR public.is_admin()
       OR EXISTS (
         SELECT 1 FROM balance_cycles bc
         JOIN programs pr ON pr.id = bc.program_id
-        WHERE bc.id::text = split_part(name, '/', 2)
+        WHERE bc.id::text = split_part(storage.objects.name, '/', 2)
           AND pr.manager_id = auth.uid()
       )
     )

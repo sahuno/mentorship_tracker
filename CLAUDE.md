@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Last Updated**: 2025-10-27
+**Last Updated**: 2026-07-11
 **Production Status**: ✅ LIVE - Deployed on Vercel with Supabase backend
 **GitHub Repository**: git@github.com:sahuno/mentorship_tracker.git
 
@@ -24,8 +24,8 @@ Golden Bridge Spending Tracker is a **production-ready** React + Supabase web ap
 
 ## Production URLs
 
-- **Live App**: https://goldenbridgespendingtracker-angdi7esv-samuel-ahunos-projects.vercel.app
-- **Supabase Dashboard**: https://app.supabase.com/project/uedwlvucyyxjenoggpwu
+- **Live App**: https://goldenbridgespendingtracker.vercel.app
+- **Supabase Dashboard**: https://app.supabase.com/project/rlqaoecdzkrshidpljwb
 - **Vercel Dashboard**: https://vercel.com/samuel-ahunos-projects/golden_bridge_spending_tracker
 - **GitHub Repo**: https://github.com/sahuno/mentorship_tracker
 
@@ -58,9 +58,9 @@ Required environment variables in `.env.local`:
 
 ```bash
 # Supabase (get from https://app.supabase.com/project/_/settings/api)
-VITE_SUPABASE_URL=https://uedwlvucyyxjenoggpwu.supabase.co
+VITE_SUPABASE_URL=https://rlqaoecdzkrshidpljwb.supabase.co
 VITE_SUPABASE_ANON_KEY=your-anon-key
-NEXT_PUBLIC_SUPABASE_URL=https://uedwlvucyyxjenoggpwu.supabase.co
+NEXT_PUBLIC_SUPABASE_URL=https://rlqaoecdzkrshidpljwb.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 
 # Gemini AI for Receipt OCR (get from https://makersuite.google.com/app/apikey)
@@ -559,4 +559,4 @@ import { User } from '@/types'                  // ✅
 
 **Maintainer**: Samuel Ahuno (ekwame001@gmail.com)
 **License**: MIT (or specify your license)
-**Last Updated**: 2025-10-27
+**Last Updated**: 2026-07-11

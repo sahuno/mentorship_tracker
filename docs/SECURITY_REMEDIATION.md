@@ -2,7 +2,7 @@
 
 **Purpose:** Single source of truth for the findings from the 2026-07-07 security review + code review, plus issues that surfaced while remediating them. Update this doc as items are fixed.
 
-**Last updated:** 2026-07-11
+**Last updated:** 2026-07-12
 **Reviews run:** 2026-07-07 (`/security-review` on RLS/auth surface, `/code-review high` on the working-tree diff)
 **Target database:** `rlqaoecdzkrshidpljwb` ("golden-bridge-tracker-restored") — the canonical project. `uedwlvucyyxjenoggpwu` was DELETED by the user. **Production is LIVE on `rlqa`** at `goldenbridgespendingtracker.vercel.app` (`main` deployed, verified).
 **How fixes are applied:** `npx supabase db push` is currently UNSAFE (see N1). Migrations are applied directly via the Supabase **management API** as `postgres` and verified against the live schema — including `storage.objects` policies (postgres CAN create policies; only `ALTER TABLE storage.objects` needs storage-admin ownership).
@@ -126,5 +126,18 @@ All code fixes are merged to `main` and deployed to production (verified `tsc --
 
 - [x] ~~**Custom SMTP + email verification.**~~ **DONE (2026-07-12)** — Gmail SMTP configured (`smtp.gmail.com:587`, sender `kwameaistudio@gmail.com`, app password in `.env.local`); password-reset + signup-confirmation emails verified delivering to inbox. Flipped `mailer_autoconfirm` OFF, so **signup email verification is back ON**.
 
+## Live verification pass (2026-07-12) — proven against production `rlqa`, not just by logic
+
+All of the following were exercised live and cleaned up afterward (throwaway users/data via Auth Admin + mgmt API; every user-facing assertion ran as a real user, never as `postgres`). App returned to baseline each time (8 profiles, 2 programs, 0 expenses, 0 residual test users).
+
+- [x] **Adversarial RLS isolation test — PASSED 14/14.** Created 2 managers + 3 participants (two participants in the SAME program — the hardest isolation case), seeded expenses/cycles/assignments/notifications, acquired real JWTs via password grant, and attacked PostgREST as each user. Confirmed: each participant sees ONLY their own expenses/cycles/milestone_assignments/notifications (co-participants in one program are blind to each other — isolation is per `participant_id`, not per program); a manager sees ONLY their own program's expenses+cycles; and a participant CANNOT write an expense to another's cycle (403), forge a notification for another user (403), self-escalate to admin (403), or read another user's profile (empty). Core security property proven live.
+- [x] **Spot-checks of the 6 deployed-but-unverified fixes — ALL PASS.**
+  - **Milestone junction refactor (Cleanup-dm)** — live E2E: a real manager assigned ONE milestone to 3 participants → DB had exactly 1 `milestones` row + 3 `milestone_assignments` rows (no duplicate milestones).
+  - **#6 (0% preserved)** — executed the real `dbProgressReportToProgressReport` mapper: `0→0`, `null→undefined`, `50→50`.
+  - **#7 (audit non-fatal)** — `logAuditEvent` returns `null` (never throws) on both RPC-error and thrown-exception; all ~25 call sites either await-and-discard or fire-and-forget the return — none treat it as op success.
+  - **#8 (receipt not dropped mid-OCR)** — **live browser E2E (Playwright/Chromium)**: with the `/api/receipt-ocr` request stalled, the Save button is `disabled` ("Uploading receipt..."), the modal stays open when clicked (save blocked), and it re-enables with the OCR result after the upload resolves.
+  - **#9 (seed-admin idempotent)** — live E2E: replayed the exact `INSERT..WHERE NOT EXISTS`; guard inserts the bootstrap row at most once and a second replay is a no-op. (The transient admin invite created during the test was deleted; prod restored to 0 admin invites, real admin intact.)
+  - **#10 (login routing)** — **live browser E2E**: a manager holding a *participant* invite signed in and landed on the MANAGER dashboard ("Program Manager" + "Financial Oversight" visible), not the participant dashboard — routing uses real `profile.role`, never the invite's `target_role`. (Confirmed `accept_invite` enrolls but does NOT change role.)
+
 ### Still open / optional
-_Nothing outstanding._ All review findings, cleanup, cutover, `db push` restoration, and SMTP/email verification are complete and live.
+_Nothing outstanding on the review/remediation side._ All review findings, cleanup, cutover, `db push` restoration, SMTP/email verification, and the 2026-07-12 live verification pass are complete. The only forward-looking decision left is the Supabase **free-tier auto-pause / Pro-upgrade** call (user's to make; no budget for Pro as of 2026-07-12).

@@ -116,10 +116,12 @@ Code-only fixes (#4 client, #6, #7, #8, #10) are committed on branch `security-r
 
 ## ✅ CUTOVER COMPLETE (2026-07-11) — production is LIVE on `rlqa` with all fixes + cleanup.
 
-## Remaining / optional follow-ups
-1. **Custom SMTP** (Resend/SendGrid) → then flip `mailer_autoconfirm` back OFF to restore email verification at signup. Currently auto-confirm is ON.
-2. **N1 / N3 / N5** — reconcile the migration ledger (needs the DB password) so `supabase db push` becomes usable again. Not blocking (mgmt-API workflow works).
-3. **Cleanup-dm** — design the milestone-assignment junction refactor (deferred data-model change).
-4. **(Optional)** apply `scripts/storage_receipts_policies.sql` via the Dashboard SQL editor for storage defense-in-depth.
-5. **(Optional)** delete the leftover participant account the user self-signed-up during smoke testing.
-6. Update the root `CLAUDE.md` "Last Updated" and the stale `docs/CLAUDE.md` (describes the old localStorage-only architecture).
+## Follow-ups — status 2026-07-11
+- [x] ~~**Cleanup-dm** — milestone junction refactor.~~ **DONE** — `createMilestoneAssignments` now creates ONE milestone + N junction rows (bulk insert) instead of a duplicate milestone per participant. Existing dup rows left as-is. tsc-clean, deployed.
+- [x] ~~**Storage defense-in-depth**~~ **DONE** — `scripts/storage_receipts_policies.sql` applied LIVE via the mgmt API (NOT the Dashboard — turns out `postgres` CAN `CREATE POLICY ON storage.objects`; the original `_09` only failed on `ALTER TABLE ... ENABLE RLS`). Fixed an ambiguous-`name` bug (42702) in the process. 3 policies (INSERT/SELECT/DELETE) now on storage.objects. **N2 correction:** only `ALTER TABLE storage.objects` needs storage-admin ownership; policies are creatable as postgres.
+- [x] ~~**CLAUDE.md refresh**~~ **DONE** — root CLAUDE.md points at rlqa, Live App URL fixed, date bumped; stale `docs/CLAUDE.md` deleted.
+- [~] **Delete smoke-test signup** — N/A: no account was created today; the current 8 accounts are all from the restore. NOTE: 4 leftover `browser-*@example.com` automated-test accounts (2026-06-20) + possibly `codexverify@gmail.com` remain — candidates for cleanup, not deleted (user didn't name them).
+
+### Still open / optional
+1. **Custom SMTP** (Resend/SendGrid) → then flip `mailer_autoconfirm` back OFF to restore email verification. Currently auto-confirm is ON.
+2. **N1 / N3 / N5** — reconcile the migration ledger (needs DB password) so `supabase db push` works. Not blocking (mgmt-API workflow works).

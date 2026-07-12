@@ -40,7 +40,7 @@
 | N1 | HIGH | Migration ledger diverged → `db push` unsafe | ⛔ OPEN | reconcile ledger | — |
 | N2 | HIGH | Storage-policy privilege blocks `_09` on this project | ✅ RESOLVED | bucket via SQL; policies → Dashboard script (optional) | — |
 | N3 | MED | Restored DB password unavailable + CLI login-role broken | ⛔ OPEN | needs user/password | — |
-| N4 | HIGH | Vercel frontend points at OLD inactive project; code fixes undeployed | ⛔ OPEN | env realignment + redeploy | — |
+| N4 | HIGH | Vercel frontend points at OLD inactive project; code fixes undeployed | ✅ DONE | env realign + merge + prod deploy | LIVE |
 | N5 | LOW | Direct API fixes not recorded in migration ledger | ⛔ OPEN (accepted) | idempotent | — |
 | N6 | MEDIUM | Leftover test admin account on live DB | ✅ DONE | deleted user + 2 test invites | live DB |
 
@@ -81,7 +81,7 @@
 - [ ] ⛔ **N1 — HIGH · Migration ledger diverged from schema → `db push` is UNSAFE.** `schema_migrations` records only 4 migrations (through `20251029214441`); the schema already has objects from ~all later migrations (applied manually). `db push` would replay them and fail/corrupt. Fix: reconcile via `supabase migration repair --status applied <version>` for each already-applied migration before any push. Blocked by N3.
 - [x] ~~**N2 — HIGH · Storage-policy privilege blocks `_09` on this project.**~~ **RESOLVED** — bucket creation works as `postgres` via `storage.buckets` (kept in `_09`). The `storage.objects` RLS policies (which need `supabase_storage_admin`) are optional defense-in-depth and live in `scripts/storage_receipts_policies.sql` for Dashboard application. Not blocking, since access is mediated by service-role edge functions.
 - [ ] ⛔ **N3 — MEDIUM · Restored DB password unavailable + CLI login-role broken.** Blocks `supabase db push`/`migration list/repair`/psql. Management-API-as-postgres is the working path for public-schema DDL.
-- [ ] ⛔ **N4 — HIGH · Vercel frontend points at OLD inactive project; code fixes undeployed.** Deployed bundle (`b5b2a79`) has `uedwlvucyyxjenoggpwu` (INACTIVE) baked in; local + fixes target `rlqaoecdzkrshidpljwb`. All code fixes (#4 client, #6, #7, #8, #10) sit in the working tree, uncommitted/undeployed. Fix: pick the canonical project, realign Vercel + `.env.local`, commit, redeploy.
+- [x] ~~**N4 — HIGH · Vercel frontend points at OLD inactive project; code fixes undeployed.**~~ **DONE (2026-07-11)** — `uedw` deleted by user; `rlqa` chosen canonical. Set all 9 Vercel env vars (prod+preview) to `rlqa` via the Vercel REST API. Set `rlqa` Auth site_url + redirect allowlist. Merged `security-remediation` → `main` (`c491be4`), pushed, production deployed and verified: `goldenbridgespendingtracker.vercel.app` serves the `rlqa`-baked bundle, edge fns return 401. Deployment protection disabled (`ssoProtection: null`) so the app is publicly reachable (was `all_except_custom_domains` — even prod had been behind Vercel SSO). Auto-confirm left ON (built-in email rate-limits signups). Smoke test (#1,#2,#4,#5, login, signup) passed on preview before promote.
 - [ ] ⛔ **N5 — LOW (accepted) · Direct API fixes not recorded in the ledger.** `_10/_11/_12/_13/_14` applied via management API, absent from `schema_migrations`. All idempotent. Fold into N1 reconciliation.
 - [x] ~~**N6 — MEDIUM · Leftover test admin account on live DB.**~~ **DONE (2026-07-11)** — verified the account owned nothing (0 programs/enrollments/cycles/milestones/notifications), then deleted the auth user via the Auth Admin API (profile cascaded). It had also created 2 junk pending elevated-role invites (`browser-invited-admin@example.com`, `browser-invited-manager@example.com`) which were deleted first (FK `invites.invited_by`). Only real admin `ekwame001@gmail.com` remains.
 
@@ -101,14 +101,25 @@
 | 2026-07-11 | delete leftover test admin + 2 test invites | Auth Admin API + mgmt API | ✅ verified (N6) |
 | 2026-07-11 | commit all working-tree work in 6 logical chunks | git branch `security-remediation` | ✅ (not merged/pushed) |
 | 2026-07-11 | create + configure private `receipts` bucket (10MB, image mimes) | mgmt API (storage.buckets) | ✅ verified (#1/N2) |
-| 2026-07-11 | cleanup round (N+1, dedup, dead code, dev proxy) — 5 commits | 3 agents; git branch | ✅ tsc clean (not merged) |
+| 2026-07-11 | cleanup round (N+1, dedup, dead code, dev proxy) — 5 commits | 3 agents; git branch | ✅ tsc clean |
+| 2026-07-11 | set 9 Vercel env vars (prod+preview) → rlqa | Vercel REST API | ✅ |
+| 2026-07-11 | rlqa Auth site_url + redirect allowlist → prod URL | mgmt API | ✅ |
+| 2026-07-11 | disable Vercel deployment protection (public app) | Vercel REST API | ✅ |
+| 2026-07-11 | enable auto-confirm (built-in email rate-limits) | mgmt API | ✅ (revisit w/ SMTP) |
+| 2026-07-11 | preview deploy + smoke test (#1,#2,#4,#5,login) | Vercel + manual | ✅ passed |
+| 2026-07-11 | delete test fixture (3 accounts + program/cycle/expense/milestone) | Auth Admin + mgmt API | ✅ |
+| 2026-07-11 | **merge → main, production deploy (c491be4)** | git push → Vercel | ✅ **LIVE on rlqa, verified** |
 
 Code-only fixes (#4 client, #6, #7, #8, #10) are committed on branch `security-remediation` (verified `tsc --noEmit` exit 0), NOT merged to `main` or deployed (see N4).
 
 ---
 
-## Suggested next steps (in order)
-1. **N1 / N3 / N5** — reconcile the migration ledger (needs the DB password) so `db push` becomes usable again.
-2. **N4** — realign environments, merge `security-remediation`, repoint + redeploy the app so the fixes reach users. **This is the highest-impact remaining item: all code fixes + cleanup sit on the branch and DB fixes are on the restored project, but the deployed app still points at the old inactive project, so users have none of this yet.**
+## ✅ CUTOVER COMPLETE (2026-07-11) — production is LIVE on `rlqa` with all fixes + cleanup.
+
+## Remaining / optional follow-ups
+1. **Custom SMTP** (Resend/SendGrid) → then flip `mailer_autoconfirm` back OFF to restore email verification at signup. Currently auto-confirm is ON.
+2. **N1 / N3 / N5** — reconcile the migration ledger (needs the DB password) so `supabase db push` becomes usable again. Not blocking (mgmt-API workflow works).
 3. **Cleanup-dm** — design the milestone-assignment junction refactor (deferred data-model change).
 4. **(Optional)** apply `scripts/storage_receipts_policies.sql` via the Dashboard SQL editor for storage defense-in-depth.
+5. **(Optional)** delete the leftover participant account the user self-signed-up during smoke testing.
+6. Update the root `CLAUDE.md` "Last Updated" and the stale `docs/CLAUDE.md` (describes the old localStorage-only architecture).

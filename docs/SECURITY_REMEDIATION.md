@@ -124,5 +124,7 @@ All code fixes are merged to `main` and deployed to production (verified `tsc --
 
 - [x] ~~**N1 / N3 / N5 — migration ledger reconciliation.**~~ **DONE (2026-07-12)** — DB password obtained (`.env.local` `SUPABASE_DB_PASSWORD`); dropped the stale `cli_login_postgres` role that broke the CLI; renamed the 21 non-standard-named migrations to unique 14-digit versions (they collided on 8-digit date prefixes — the root cause of the divergence); `migration repair --status applied` for all 21. `supabase db push --dry-run` now reports "Remote database is up to date". NOTE: CLI must connect via the **pooler** `--db-url` (the direct `db.<ref>.supabase.co` host is IPv6-only); `SUPABASE_DB_PASSWORD` lives in `.env.local`.
 
+- [x] ~~**Custom SMTP + email verification.**~~ **DONE (2026-07-12)** — Gmail SMTP configured (`smtp.gmail.com:587`, sender `kwameaistudio@gmail.com`, app password in `.env.local`); password-reset + signup-confirmation emails verified delivering to inbox. Flipped `mailer_autoconfirm` OFF, so **signup email verification is back ON**.
+
 ### Still open / optional
-1. **Custom SMTP** (Resend/SendGrid) → then flip `mailer_autoconfirm` back OFF to restore email verification. Currently auto-confirm is ON. **(Only remaining item.)**
+_Nothing outstanding._ All review findings, cleanup, cutover, `db push` restoration, and SMTP/email verification are complete and live.

@@ -37,11 +37,11 @@
 | S3 | LOW | `find_user_by_email` leaks role | 🚫 DEFERRED | below confidence bar | — |
 | Cleanup | — | N+1 queries, duplication, dead weight, dev proxy | ✅ MOSTLY DONE | 5 commits | code in tree |
 | Cleanup-dm | — | Duplicate milestone rows per participant (data-model) | ✅ DONE | `milestones.ts` junction refactor | LIVE |
-| N1 | HIGH | Migration ledger diverged → `db push` unsafe | ⛔ OPEN | reconcile ledger | — |
+| N1 | HIGH | Migration ledger diverged → `db push` unsafe | ✅ DONE | renamed migrations + repaired ledger | live DB |
 | N2 | HIGH | Storage-policy privilege blocks `_09` on this project | ✅ RESOLVED | bucket via SQL; policies → Dashboard script (optional) | — |
-| N3 | MED | Restored DB password unavailable + CLI login-role broken | ⛔ OPEN | needs user/password | — |
+| N3 | MED | Restored DB password unavailable + CLI login-role broken | ✅ DONE | password in .env.local; stale role dropped | — |
 | N4 | HIGH | Vercel frontend points at OLD inactive project; code fixes undeployed | ✅ DONE | env realign + merge + prod deploy | LIVE |
-| N5 | LOW | Direct API fixes not recorded in migration ledger | ⛔ OPEN (accepted) | idempotent | — |
+| N5 | LOW | Direct API fixes not recorded in migration ledger | ✅ DONE | ledger reconciled (all 25 applied) | live DB |
 | N6 | MEDIUM | Leftover test admin account on live DB | ✅ DONE | deleted user + 2 test invites | live DB |
 
 ---
@@ -122,6 +122,7 @@ All code fixes are merged to `main` and deployed to production (verified `tsc --
 - [x] ~~**CLAUDE.md refresh**~~ **DONE** — root CLAUDE.md points at rlqa, Live App URL fixed, date bumped; stale `docs/CLAUDE.md` deleted.
 - [~] **Delete smoke-test signup** — N/A: no account was created today; the current 8 accounts are all from the restore. NOTE: 4 leftover `browser-*@example.com` automated-test accounts (2026-06-20) + possibly `codexverify@gmail.com` remain — candidates for cleanup, not deleted (user didn't name them).
 
+- [x] ~~**N1 / N3 / N5 — migration ledger reconciliation.**~~ **DONE (2026-07-12)** — DB password obtained (`.env.local` `SUPABASE_DB_PASSWORD`); dropped the stale `cli_login_postgres` role that broke the CLI; renamed the 21 non-standard-named migrations to unique 14-digit versions (they collided on 8-digit date prefixes — the root cause of the divergence); `migration repair --status applied` for all 21. `supabase db push --dry-run` now reports "Remote database is up to date". NOTE: CLI must connect via the **pooler** `--db-url` (the direct `db.<ref>.supabase.co` host is IPv6-only); `SUPABASE_DB_PASSWORD` lives in `.env.local`.
+
 ### Still open / optional
-1. **Custom SMTP** (Resend/SendGrid) → then flip `mailer_autoconfirm` back OFF to restore email verification. Currently auto-confirm is ON.
-2. **N1 / N3 / N5** — reconcile the migration ledger (needs DB password) so `supabase db push` works. Not blocking (mgmt-API workflow works).
+1. **Custom SMTP** (Resend/SendGrid) → then flip `mailer_autoconfirm` back OFF to restore email verification. Currently auto-confirm is ON. **(Only remaining item.)**

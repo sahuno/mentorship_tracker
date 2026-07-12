@@ -4,10 +4,10 @@
 
 **Last updated:** 2026-07-11
 **Reviews run:** 2026-07-07 (`/security-review` on RLS/auth surface, `/code-review high` on the working-tree diff)
-**Target database:** `rlqaoecdzkrshidpljwb` ("golden-bridge-tracker-restored") — the ACTIVE restored project. NOTE the deployed Vercel frontend still points at the OLD inactive project `uedwlvucyyxjenoggpwu` (see N4).
-**How fixes are applied:** `npx supabase db push` is currently UNSAFE (see N1). Migrations are applied directly via the Supabase **management API** as `postgres` (public-schema objects only) and verified against the live schema. `_09` storage is the exception — it needs manual Dashboard application (see N2).
+**Target database:** `rlqaoecdzkrshidpljwb` ("golden-bridge-tracker-restored") — the canonical project. `uedwlvucyyxjenoggpwu` was DELETED by the user. **Production is LIVE on `rlqa`** at `goldenbridgespendingtracker.vercel.app` (`main` deployed, verified).
+**How fixes are applied:** `npx supabase db push` is currently UNSAFE (see N1). Migrations are applied directly via the Supabase **management API** as `postgres` and verified against the live schema — including `storage.objects` policies (postgres CAN create policies; only `ALTER TABLE storage.objects` needs storage-admin ownership).
 
-> **Two kinds of "done":** DB/migration fixes are applied to the restored DB (live). **Code fixes are committed on branch `security-remediation`** (6 logical commits, 2026-07-11) but NOT merged to `main` or deployed, and the deployed frontend still points at the old project (N4). Users don't get code fixes until the branch is merged and the app is repointed + redeployed.
+> **Status (2026-07-11): CUTOVER COMPLETE.** All security findings (S1, S2, #1–#10) and all cleanup are implemented, merged to `main`, and LIVE in production on `rlqa`. Remaining items are intentionally deferred / optional (S3 won't-fix; N1/N3/N5 migration-ledger reconciliation — non-blocking; custom SMTP).
 
 ## Status legend
 - ✅ DONE — applied to the live restored DB and/or fixed in the working tree and verified (struck through in lists below)
@@ -36,7 +36,7 @@
 | #10 | LOW/MED | Login routes to wrong dashboard from invite role | ✅ DONE | `LoginSupabase.tsx` | code in tree |
 | S3 | LOW | `find_user_by_email` leaks role | 🚫 DEFERRED | below confidence bar | — |
 | Cleanup | — | N+1 queries, duplication, dead weight, dev proxy | ✅ MOSTLY DONE | 5 commits | code in tree |
-| Cleanup-dm | — | Duplicate milestone rows per participant (data-model) | ⛔ DEFERRED | needs design | — |
+| Cleanup-dm | — | Duplicate milestone rows per participant (data-model) | ✅ DONE | `milestones.ts` junction refactor | LIVE |
 | N1 | HIGH | Migration ledger diverged → `db push` unsafe | ⛔ OPEN | reconcile ledger | — |
 | N2 | HIGH | Storage-policy privilege blocks `_09` on this project | ✅ RESOLVED | bucket via SQL; policies → Dashboard script (optional) | — |
 | N3 | MED | Restored DB password unavailable + CLI login-role broken | ⛔ OPEN | needs user/password | — |
@@ -69,7 +69,7 @@
 
 ### Cleanup themes (agent round 2026-07-11 — 3 agents, committed on `security-remediation`)
 - [x] ~~**N+1 queries.**~~ **DONE** — `finance.getProgramParticipantFinancials` 1+N → 2 queries; `Dashboard.loadProgramData` 1+N → 1 (new `cycles.getMyBalanceCyclesWithExpenses`). Ordering/output shape preserved. Also routed `Dashboard.handleSaveExpense` through `mappers.expenseToDb*`.
-- [ ] ⛔ **DEFERRED — Duplicate milestone rows** created per participant instead of using the assignment junction table. This is a DATA-MODEL change (would alter how assignments + the delete-milestone-when-last-assignment logic work, and affects existing rows), not a pure cleanup. Needs its own design + possibly a migration. Not done this round.
+- [x] ~~**Duplicate milestone rows** created per participant instead of using the assignment junction table.~~ **DONE (2026-07-11, later)** — `createMilestoneAssignments` now creates ONE milestone + N junction rows (bulk insert). Existing dup rows from past assignments left as-is (no retroactive de-dupe). Deployed (`6df3df2`).
 - [x] ~~**Duplication.**~~ **DONE** — `normalizeReceiptItem` deduped (exported from `receiptOcrShared`); ~55 lines of edge boilerplate + the cycle-authorization logic extracted to `api/_lib/supabaseServer.ts` (`canAccessCycle`), preserving per-handler error strings/order; password validation consolidated into `auth.validateNewPassword` (used by ResetPassword + AccountSettings). **Exception:** `LoginSupabase` password validation left as-is — its messages omit trailing periods, so deduping would change user-visible text.
 - [x] ~~**Dead weight (tabs).**~~ **DONE** — removed the provably-dead localStorage `else` fallback branches in Finance/Milestone/Assignments tabs (+ unused uuid imports). **CORRECTION:** the `useLocalStorage` cycle/milestone mirrors in `Dashboard.tsx` are **NOT dead** — they are read by `notificationManager.checkDeadlines` and `ReportsAnalytics`. Removing them would break deadline notifications and reports, so they were kept. (The original review's "write-only mirrors" finding was wrong.)
 - [x] ~~**Dev proxy config.**~~ **DONE** — `vite.config.ts` now loads `.env.local` server-side vars into `process.env` in `serve` (dev) mode only, so dev receipt uploads work; secrets never reach the client bundle; prod build untouched.
@@ -110,7 +110,7 @@
 | 2026-07-11 | delete test fixture (3 accounts + program/cycle/expense/milestone) | Auth Admin + mgmt API | ✅ |
 | 2026-07-11 | **merge → main, production deploy (c491be4)** | git push → Vercel | ✅ **LIVE on rlqa, verified** |
 
-Code-only fixes (#4 client, #6, #7, #8, #10) are committed on branch `security-remediation` (verified `tsc --noEmit` exit 0), NOT merged to `main` or deployed (see N4).
+All code fixes are merged to `main` and deployed to production (verified `tsc --noEmit` exit 0). Latest production commit: `6df3df2` (incl. milestone junction refactor).
 
 ---
 

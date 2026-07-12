@@ -52,6 +52,24 @@ npx supabase migration list       # List applied migrations
 npx supabase db reset             # Reset local database (development only)
 ```
 
+**⚠️ CLI connection gotcha (read before running any `supabase` DB command):**
+- The CLI must connect via the **pooler**, not the direct host. The direct
+  `db.<ref>.supabase.co` host is **IPv6-only** and fails to connect from many
+  environments (CI, containers, some networks). Pass the pooler explicitly:
+  ```bash
+  npx supabase migration list --db-url \
+    "postgresql://postgres.rlqaoecdzkrshidpljwb:$SUPABASE_DB_PASSWORD@aws-1-us-east-1.pooler.supabase.com:5432/postgres"
+  ```
+- The DB password lives in `.env.local` as `SUPABASE_DB_PASSWORD` (gitignored).
+  Get/reset it at Supabase Dashboard → Settings → Database (it is NOT the same
+  as the anon/service_role API keys, and is only shown once / on reset).
+- Migration files MUST use unique **14-digit** version prefixes
+  (`YYYYMMDDHHMMSS_name.sql`). Non-standard 8-digit-date names collide on
+  version and break `db push` — create new ones with `npx supabase migration new <name>`.
+- If the CLI errors on "Initialising login role" (`0LP01: role postgres is a
+  member of cli_login_postgres`), drop the stale `cli_login_postgres` role
+  (it will be recreated cleanly on the next run).
+
 ### Environment Configuration
 
 Required environment variables in `.env.local`:
